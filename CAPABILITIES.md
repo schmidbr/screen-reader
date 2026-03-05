@@ -1,6 +1,6 @@
 ﻿# SnapNarrate Capabilities
 
-Last updated: 2026-03-06
+Last updated: 2026-03-05
 
 ## Overview
 
@@ -9,8 +9,10 @@ SnapNarrate v2 is a Windows-first game narrator that captures screenshots, extra
 ## Core Capabilities
 
 - Global capture hotkey (default `ctrl+shift+n`)
+- Global region-capture hotkey with click-drag selection (default `ctrl+shift+r`)
 - Global stop-speaking hotkey (default `ctrl+shift+s`)
 - Full-screen screenshot capture with cooldown control
+- One-time region screenshot capture across virtual desktop (all monitors)
 - AI text extraction focused on long-form story/dialog/lore
 - Selectable extraction backend via config/UI (`vision.provider = openai|ollama`)
 - Ollama two-pass paragraph coverage flow (paragraph collection + finalization)
@@ -21,7 +23,10 @@ SnapNarrate v2 is a Windows-first game narrator that captures screenshots, extra
 - Retry with exponential backoff, then skip on persistent TTS failure
 - Audio playback interruption support (`Stop Speaking`)
 - Tray controls:
+  - Version
   - Capture Now
+  - Capture Region Now
+  - Capture Mode toggle (Full Screen / Region)
   - Stop Speaking
   - Pause/Resume
   - Settings
@@ -36,6 +41,10 @@ SnapNarrate v2 is a Windows-first game narrator that captures screenshots, extra
   - OpenAI usage/cost best-effort organization fetch with session-token fallback
   - ElevenLabs subscription character credit reporting
   - Configurable usage cache to avoid rate spikes
+- Version visibility:
+  - tray menu item (`Version: x.y.z`)
+  - settings header (`SnapNarrate vx.y.z`)
+  - CLI commands (`snapnarrate --version`, `snapnarrate version`)
 - Desktop shortcut creation command
 - Startup shortcut management (Startup folder-based)
 - Tray icon loaded from project `.ico` asset with fallback to generated icon
@@ -46,6 +55,8 @@ SnapNarrate v2 is a Windows-first game narrator that captures screenshots, extra
   - `doctor`
   - `voices`
   - `test-capture`
+  - `usage`
+  - `version`
   - `ui`
   - `install-shortcut`
   - `startup --enable|--disable|--status`
@@ -62,7 +73,8 @@ Managed via `config.toml`:
 - `ollama.num_predict`, `ollama.temperature`, `ollama.top_p`, `ollama.continuation_attempts`
 - `ollama.min_paragraphs`, `ollama.coverage_retry_attempts`
 - `elevenlabs.api_key`, `elevenlabs.voice_id`, `elevenlabs.model_id`, `elevenlabs.output_format`
-- `capture.hotkey`, `capture.stop_hotkey`, `capture.cooldown_ms`
+- `capture.hotkey`, `capture.region_hotkey`, `capture.stop_hotkey`, `capture.cooldown_ms`
+- `capture.mode`, `capture.min_region_px`
 - `filter.min_block_chars`, `filter.ignore_short_lines`
 - `dedup.enabled`, `dedup.similarity_threshold`
 - `playback.retry_count`, `playback.retry_backoff_ms`
@@ -77,12 +89,13 @@ Managed via `config.toml`:
 - Hotkey registration status surfaced via tray notification and log entries
 - `doctor` validates required settings and warns when not elevated
 - `doctor` includes warning-level checks for OpenAI org usage endpoint access and ElevenLabs subscription endpoint reachability
+- `doctor` validates region-capture settings (`capture.mode`, `capture.region_hotkey`, `capture.min_region_px`)
 - Unit tests cover parser, dedup, pipeline retries, Ollama coverage behavior, startup/shortcut utilities, config round-trip, and audio payload handling
 
 ## Current Limitations
 
 - Windows-focused implementation
-- Capture mode is full-screen only (no per-window targeting yet)
+- Capture mode supports full-screen and click-drag region; per-window targeting is not available yet
 - Requires network access for OpenAI and ElevenLabs; Ollama local mode requires a local Ollama server
 - API keys are currently file/env based (not yet in OS credential vault)
 - Output quality depends on game UI readability and model extraction confidence

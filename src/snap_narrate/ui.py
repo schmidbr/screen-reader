@@ -6,6 +6,7 @@ from tkinter import messagebox, ttk
 
 from snap_narrate.config import AppConfig, init_config, load_config, save_config
 from snap_narrate.startup import StartupManager
+from snap_narrate.versioning import get_app_version
 
 
 class SettingsUI:
@@ -25,6 +26,7 @@ class SettingsUI:
         self.root.bind_all("<MouseWheel>", self._on_mousewheel)
 
         self.vars: dict[str, tk.Variable] = {}
+        self.app_version = get_app_version()
         self._build()
 
     def _build(self) -> None:
@@ -44,6 +46,8 @@ class SettingsUI:
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
         row = 0
+        ttk.Label(frame, text=f"SnapNarrate v{self.app_version}", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w", pady=(0, 8))
+        row += 1
         ttk.Label(frame, text="Vision Provider", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w", pady=(0, 4))
         row += 1
         self._add_combobox(frame, row, "Provider", "vision.provider", self.cfg.vision.provider, ["openai", "ollama"])
@@ -116,11 +120,17 @@ class SettingsUI:
         row += 1
         ttk.Label(frame, text="Hotkeys & Capture", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w", pady=(0, 4))
         row += 1
+        self._add_combobox(frame, row, "Capture Mode", "capture.mode", self.cfg.capture.mode, ["fullscreen", "region"])
+        row += 1
         self._add_entry(frame, row, "Capture Hotkey", "capture.hotkey", self.cfg.capture.hotkey)
+        row += 1
+        self._add_entry(frame, row, "Region Capture Hotkey", "capture.region_hotkey", self.cfg.capture.region_hotkey)
         row += 1
         self._add_entry(frame, row, "Stop Hotkey", "capture.stop_hotkey", self.cfg.capture.stop_hotkey)
         row += 1
         self._add_entry(frame, row, "Capture Cooldown (ms)", "capture.cooldown_ms", str(self.cfg.capture.cooldown_ms))
+        row += 1
+        self._add_entry(frame, row, "Min Region Size (px)", "capture.min_region_px", str(self.cfg.capture.min_region_px))
         row += 1
 
         ttk.Separator(frame).grid(row=row, column=0, columnspan=2, sticky="ew", pady=8)
@@ -245,8 +255,11 @@ class SettingsUI:
         cfg.elevenlabs.output_format = str(self.vars["elevenlabs.output_format"].get()).strip()
 
         cfg.capture.hotkey = str(self.vars["capture.hotkey"].get()).strip()
+        cfg.capture.mode = str(self.vars["capture.mode"].get()).strip().lower()
+        cfg.capture.region_hotkey = str(self.vars["capture.region_hotkey"].get()).strip()
         cfg.capture.stop_hotkey = str(self.vars["capture.stop_hotkey"].get()).strip()
         cfg.capture.cooldown_ms = self._to_int("capture.cooldown_ms")
+        cfg.capture.min_region_px = self._to_int("capture.min_region_px")
 
         cfg.filter.min_block_chars = self._to_int("filter.min_block_chars")
         cfg.filter.ignore_short_lines = self._to_int("filter.ignore_short_lines")

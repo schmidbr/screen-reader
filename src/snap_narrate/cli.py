@@ -16,10 +16,12 @@ from snap_narrate.shortcuts import ShortcutManager
 from snap_narrate.startup import StartupManager
 from snap_narrate.ui import launch_settings_ui_with_startup
 from snap_narrate.usage import UsageService
+from snap_narrate.versioning import get_app_version
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="snapnarrate", description="SnapNarrate game narrator")
+    parser.add_argument("--version", action="version", version=f"SnapNarrate {get_app_version()}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="Run the hotkey + tray narrator")
@@ -53,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     usage = sub.add_parser("usage", help="Show OpenAI and ElevenLabs usage/credits")
     usage.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     usage.add_argument("--json", action="store_true", dest="as_json")
+
+    sub.add_parser("version", help="Show SnapNarrate version")
 
     cfg = sub.add_parser("config", help="Config helpers")
     cfg_sub = cfg.add_subparsers(dest="config_command", required=True)
@@ -112,7 +116,10 @@ def run_command(config_path: Path, game_profile: str, auto_launch: bool = False)
             "capturer": capturer,
             "pipeline": pipeline,
             "hotkey": cfg.capture.hotkey,
+            "region_hotkey": cfg.capture.region_hotkey,
             "stop_hotkey": cfg.capture.stop_hotkey,
+            "capture_mode": cfg.capture.mode,
+            "min_region_px": cfg.capture.min_region_px,
             "log_path": Path(cfg.log_file),
             "usage_service": UsageService.from_config(cfg),
         }
@@ -138,7 +145,10 @@ def run_command(config_path: Path, game_profile: str, auto_launch: bool = False)
         capturer=parts["capturer"],  # type: ignore[arg-type]
         pipeline=parts["pipeline"],  # type: ignore[arg-type]
         hotkey=str(parts["hotkey"]),
+        region_hotkey=str(parts["region_hotkey"]),
         stop_hotkey=str(parts["stop_hotkey"]),
+        capture_mode=str(parts["capture_mode"]),
+        min_region_px=int(parts["min_region_px"]),
         log_path=log_path,
         game_profile=game_profile,
         config_path=config_path,
@@ -215,7 +225,10 @@ def doctor_command(config_path: Path) -> int:
     checks.append(("ELEVENLABS key", bool(cfg.elevenlabs.api_key), "Set elevenlabs.api_key or ELEVENLABS_API_KEY", True))
     checks.append(("ELEVENLABS voice_id", bool(cfg.elevenlabs.voice_id), "Set elevenlabs.voice_id or ELEVENLABS_VOICE_ID", True))
     checks.append(("Capture hotkey configured", bool(cfg.capture.hotkey), cfg.capture.hotkey, True))
+    checks.append(("Region hotkey configured", bool(cfg.capture.region_hotkey), cfg.capture.region_hotkey, True))
     checks.append(("Stop hotkey configured", bool(cfg.capture.stop_hotkey), cfg.capture.stop_hotkey, True))
+    checks.append(("Capture mode", cfg.capture.mode in {"fullscreen", "region"}, cfg.capture.mode, True))
+    checks.append(("Min region size", cfg.capture.min_region_px > 0, str(cfg.capture.min_region_px), True))
     usage_service = UsageService.from_config(cfg)
     snapshot = usage_service.get_snapshot(force_refresh=True)
     checks.append(
@@ -282,7 +295,7 @@ def test_capture_command(config_path: Path, game_profile: str) -> int:
         save_debug=cfg.debug.save_screenshots,
         debug_dir=cfg.debug.screenshot_dir,
     )
-    image_bytes = capturer.capture_png()
+    image_bytes = capturer.capture_fullscreen_png()
 
     extractor = build_extractor(cfg)
     result = extractor.extract_narrative_text(image_bytes=image_bytes, game_profile=game_profile)
@@ -373,6 +386,11 @@ def usage_command(config_path: Path, as_json: bool = False) -> int:
     return 0 if (snapshot.openai.status == "ok" or snapshot.elevenlabs.status == "ok") else 1
 
 
+def version_command() -> int:
+    print(f"SnapNarrate {get_app_version()}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -412,6 +430,8 @@ def main(argv: list[str] | None = None) -> int:
         return startup_command(args.config, args.enable, args.disable, args.status)
     if args.command == "usage":
         return usage_command(args.config, args.as_json)
+    if args.command == "version":
+        return version_command()
     if args.command == "config" and args.config_command == "init":
         return config_init_command(args.config, args.force)
 

@@ -41,8 +41,11 @@ def test_save_config_round_trip(tmp_path: Path) -> None:
     cfg.elevenlabs.api_key = "k2"
     cfg.elevenlabs.voice_id = "voice-123"
     cfg.capture.hotkey = "ctrl+shift+n"
+    cfg.capture.mode = "region"
+    cfg.capture.region_hotkey = "ctrl+shift+r"
     cfg.capture.stop_hotkey = "ctrl+shift+s"
     cfg.capture.cooldown_ms = 1800
+    cfg.capture.min_region_px = 96
     cfg.filter.min_block_chars = 160
     cfg.dedup.similarity_threshold = 0.9
     cfg.playback.retry_count = 3
@@ -71,8 +74,11 @@ def test_save_config_round_trip(tmp_path: Path) -> None:
     assert loaded.elevenlabs.api_key == "k2"
     assert loaded.elevenlabs.voice_id == "voice-123"
     assert loaded.capture.hotkey == "ctrl+shift+n"
+    assert loaded.capture.mode == "region"
+    assert loaded.capture.region_hotkey == "ctrl+shift+r"
     assert loaded.capture.stop_hotkey == "ctrl+shift+s"
     assert loaded.capture.cooldown_ms == 1800
+    assert loaded.capture.min_region_px == 96
     assert loaded.filter.min_block_chars == 160
     assert loaded.dedup.similarity_threshold == 0.9
     assert loaded.playback.retry_count == 3

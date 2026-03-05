@@ -13,15 +13,18 @@ from PIL import Image
 from pystray import Menu, MenuItem
 
 from snap_narrate.icon_utils import load_tray_icon
-from snap_narrate.capture import ScreenCapturer
+from snap_narrate.capture import Bounds, ScreenCapturer, is_valid_bounds
 from snap_narrate.pipeline import NarrationPipeline
+from snap_narrate.region_selector import select_region_bounds
 from snap_narrate.startup import StartupManager
 from snap_narrate.usage import UsageService
+from snap_narrate.versioning import get_app_version
 
 
 @dataclass
 class RuntimeState:
     paused: bool = False
+    capture_mode: str = "fullscreen"
 
 
 class SnapNarrateRuntime:
@@ -30,28 +33,36 @@ class SnapNarrateRuntime:
         capturer: ScreenCapturer,
         pipeline: NarrationPipeline,
         hotkey: str,
+        region_hotkey: str,
         stop_hotkey: str,
+        capture_mode: str,
+        min_region_px: int,
         log_path: Path,
         game_profile: str = "default",
         config_path: Path | None = None,
         reload_callback: Callable[[Path], dict[str, Any]] | None = None,
         startup_manager: StartupManager | None = None,
         usage_service: UsageService | None = None,
+        region_selector: Callable[[], Bounds | None] | None = None,
         startup_notice: str | None = None,
     ) -> None:
         self.capturer = capturer
         self.pipeline = pipeline
         self.hotkey = hotkey
+        self.region_hotkey = region_hotkey
         self.stop_hotkey = stop_hotkey
+        self.min_region_px = int(min_region_px)
         self.log_path = log_path
         self.game_profile = game_profile
         self.config_path = config_path
         self.reload_callback = reload_callback
         self.startup_manager = startup_manager
         self.usage_service = usage_service
+        self.region_selector = region_selector or select_region_bounds
         self.startup_notice = startup_notice
+        self.app_version = get_app_version()
 
-        self.state = RuntimeState(paused=False)
+        self.state = RuntimeState(paused=False, capture_mode=capture_mode if capture_mode in {"fullscreen", "region"} else "fullscreen")
         self.logger = logging.getLogger("snap_narrate")
 
         self._running = threading.Event()
@@ -62,6 +73,7 @@ class SnapNarrateRuntime:
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._icon: pystray.Icon | None = None
         self._capture_hotkey_ok = False
+        self._region_hotkey_ok = False
         self._stop_hotkey_ok = False
         self._settings_open = False
         self._settings_lock = threading.Lock()
@@ -77,14 +89,17 @@ class SnapNarrateRuntime:
             self._notify(self.startup_notice)
 
         self.logger.info(
-            "event=runtime_started hotkey=%s stop_hotkey=%s hotkey_ok=%s stop_hotkey_ok=%s",
+            "event=runtime_started hotkey=%s region_hotkey=%s stop_hotkey=%s mode=%s hotkey_ok=%s region_hotkey_ok=%s stop_hotkey_ok=%s",
             self.hotkey,
+            self.region_hotkey,
             self.stop_hotkey,
+            self.state.capture_mode,
             self._capture_hotkey_ok,
+            self._region_hotkey_ok,
             self._stop_hotkey_ok,
         )
         print(
-            f"SnapNarrate running. Capture: {self.hotkey}. Stop speaking: {self.stop_hotkey}. "
+            f"SnapNarrate running. Full capture: {self.hotkey}. Region capture: {self.region_hotkey}. Stop speaking: {self.stop_hotkey}. "
             "Use tray icon to pause or exit."
         )
 
@@ -109,22 +124,26 @@ class SnapNarrateRuntime:
         self._notify(f"Test voice: {result.message}")
 
     def _on_hotkey(self) -> None:
-        self.logger.info("event=capture_hotkey_pressed paused=%s", self.state.paused)
+        self.logger.info("event=fullscreen_hotkey_pressed paused=%s", self.state.paused)
         if self.state.paused:
             self.logger.info("event=capture_ignored reason=paused")
             return
 
         try:
-            image_bytes = self.capturer.capture_png()
+            image_bytes = self.capturer.capture_fullscreen_png()
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("event=capture_failed error=%s", exc)
             self._notify(f"Capture failed: {exc}")
             return
 
-        with self._lock:
-            self._pending_capture = image_bytes
-            self._work_event.set()
-        self.logger.info("event=capture_enqueued bytes=%s", len(image_bytes))
+        self._enqueue_capture(image_bytes)
+
+    def _on_region_hotkey(self) -> None:
+        self.logger.info("event=region_hotkey_pressed paused=%s", self.state.paused)
+        if self.state.paused:
+            self.logger.info("event=capture_ignored reason=paused")
+            return
+        self._capture_region_once()
 
     def _worker_loop(self) -> None:
         while self._running.is_set():
@@ -154,7 +173,10 @@ class SnapNarrateRuntime:
 
     def _tray_menu(self) -> Menu:
         return Menu(
+            MenuItem(lambda _: f"Version: {self.app_version}", lambda icon, item: None, enabled=False),
             MenuItem("Capture Now", self._tray_capture_now),
+            MenuItem("Capture Region Now", self._tray_capture_region_now),
+            MenuItem(lambda _: f"Capture Mode: {'Region' if self.state.capture_mode == 'region' else 'Full Screen'}", self._tray_toggle_capture_mode),
             MenuItem("Stop Speaking", self._tray_stop_speaking),
             MenuItem(lambda _: "Resume" if self.state.paused else "Pause", self._toggle_pause),
             MenuItem("Settings", self._tray_open_settings),
@@ -167,7 +189,19 @@ class SnapNarrateRuntime:
         )
 
     def _tray_capture_now(self, icon: pystray.Icon, item: MenuItem) -> None:  # noqa: ARG002
-        self._on_hotkey()
+        if self.state.capture_mode == "region":
+            self._capture_region_once()
+        else:
+            self._on_hotkey()
+
+    def _tray_capture_region_now(self, icon: pystray.Icon, item: MenuItem) -> None:  # noqa: ARG002
+        self._capture_region_once()
+
+    def _tray_toggle_capture_mode(self, icon: pystray.Icon, item: MenuItem) -> None:  # noqa: ARG002
+        self.state.capture_mode = "region" if self.state.capture_mode == "fullscreen" else "fullscreen"
+        self.logger.info("event=capture_mode_toggled mode=%s", self.state.capture_mode)
+        self._sync_capture_mode_to_config(self.state.capture_mode)
+        self._notify(f"Capture mode: {'Region' if self.state.capture_mode == 'region' else 'Full Screen'}")
 
     def _tray_test_voice(self, icon: pystray.Icon, item: MenuItem) -> None:  # noqa: ARG002
         try:
@@ -226,7 +260,8 @@ class SnapNarrateRuntime:
 
     def _tray_show_hotkeys(self, icon: pystray.Icon, item: MenuItem) -> None:  # noqa: ARG002
         msg = (
-            f"Capture: {self.hotkey} ({'OK' if self._capture_hotkey_ok else 'FAILED'})\n"
+            f"Full Capture: {self.hotkey} ({'OK' if self._capture_hotkey_ok else 'FAILED'})\n"
+            f"Region Capture: {self.region_hotkey} ({'OK' if self._region_hotkey_ok else 'FAILED'})\n"
             f"Stop: {self.stop_hotkey} ({'OK' if self._stop_hotkey_ok else 'FAILED'})"
         )
         self._notify(msg)
@@ -284,6 +319,7 @@ class SnapNarrateRuntime:
 
     def _register_hotkeys(self) -> None:
         self._capture_hotkey_ok = False
+        self._region_hotkey_ok = False
         self._stop_hotkey_ok = False
 
         try:
@@ -292,6 +328,13 @@ class SnapNarrateRuntime:
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("event=hotkey_register_failed kind=capture hotkey=%s error=%s", self.hotkey, exc)
             self._notify(f"Capture hotkey failed: {self.hotkey}")
+
+        try:
+            keyboard.add_hotkey(self.region_hotkey, self._on_region_hotkey)
+            self._region_hotkey_ok = True
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("event=hotkey_register_failed kind=region hotkey=%s error=%s", self.region_hotkey, exc)
+            self._notify(f"Region hotkey failed: {self.region_hotkey}")
 
         try:
             keyboard.add_hotkey(self.stop_hotkey, self._on_stop_hotkey)
@@ -337,6 +380,18 @@ class SnapNarrateRuntime:
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("event=startup_config_sync_failed error=%s", exc)
 
+    def _sync_capture_mode_to_config(self, mode: str) -> None:
+        if not self.config_path:
+            return
+        try:
+            from snap_narrate.config import load_config, save_config
+
+            cfg = load_config(self.config_path)
+            cfg.capture.mode = mode
+            save_config(self.config_path, cfg)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("event=capture_mode_config_sync_failed error=%s", exc)
+
     def _read_config_mtime(self) -> float | None:
         if not self.config_path:
             return None
@@ -376,13 +431,41 @@ class SnapNarrateRuntime:
             self.capturer = update.get("capturer", self.capturer)
             self.pipeline = update.get("pipeline", self.pipeline)
             self.hotkey = str(update.get("hotkey", self.hotkey))
+            self.region_hotkey = str(update.get("region_hotkey", self.region_hotkey))
             self.stop_hotkey = str(update.get("stop_hotkey", self.stop_hotkey))
+            mode = str(update.get("capture_mode", self.state.capture_mode)).strip().lower()
+            self.state.capture_mode = mode if mode in {"fullscreen", "region"} else "fullscreen"
+            self.min_region_px = int(update.get("min_region_px", self.min_region_px))
             self.log_path = Path(update.get("log_path", self.log_path))
             usage_service = update.get("usage_service")
             if isinstance(usage_service, UsageService):
                 self.usage_service = usage_service
         keyboard.clear_all_hotkeys()
         self._register_hotkeys()
+
+    def _capture_region_once(self) -> None:
+        if self.state.paused:
+            self.logger.info("event=region_capture_ignored reason=paused")
+            return
+        try:
+            bounds = self.region_selector()
+            if not is_valid_bounds(bounds, self.min_region_px):
+                self.logger.info("event=region_capture_skipped reason=invalid_or_cancelled bounds=%s", bounds)
+                self._notify("Region capture cancelled or too small")
+                return
+            image_bytes = self.capturer.capture_region_png(bounds)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("event=region_capture_failed error=%s", exc)
+            self._notify(f"Region capture failed: {exc}")
+            return
+        self.logger.info("event=region_capture_success bounds=%s", bounds)
+        self._enqueue_capture(image_bytes)
+
+    def _enqueue_capture(self, image_bytes: bytes) -> None:
+        with self._lock:
+            self._pending_capture = image_bytes
+            self._work_event.set()
+        self.logger.info("event=capture_enqueued bytes=%s", len(image_bytes))
 
     @staticmethod
     def _make_icon() -> Image.Image:

@@ -48,8 +48,11 @@ class ElevenLabsConfig:
 @dataclass
 class CaptureConfig:
     hotkey: str = "ctrl+shift+n"
+    mode: str = "fullscreen"
+    region_hotkey: str = "ctrl+shift+r"
     stop_hotkey: str = "ctrl+shift+s"
     cooldown_ms: int = 1500
+    min_region_px: int = 64
 
 
 @dataclass
@@ -165,8 +168,11 @@ def load_config(path: Path) -> AppConfig:
         ),
         capture=CaptureConfig(
             hotkey=str(capture_data.get("hotkey", CaptureConfig.hotkey)),
+            mode=str(capture_data.get("mode", CaptureConfig.mode)).strip().lower(),
+            region_hotkey=str(capture_data.get("region_hotkey", CaptureConfig.region_hotkey)),
             stop_hotkey=str(capture_data.get("stop_hotkey", CaptureConfig.stop_hotkey)),
             cooldown_ms=int(capture_data.get("cooldown_ms", CaptureConfig.cooldown_ms)),
+            min_region_px=int(capture_data.get("min_region_px", CaptureConfig.min_region_px)),
         ),
         filter=FilterConfig(
             min_block_chars=int(filter_data.get("min_block_chars", FilterConfig.min_block_chars)),
@@ -200,6 +206,8 @@ def load_config(path: Path) -> AppConfig:
     cfg.openai.base_url = os.getenv("OPENAI_BASE_URL", cfg.openai.base_url)
 
     cfg.vision.provider = os.getenv("VISION_PROVIDER", cfg.vision.provider)
+    if cfg.capture.mode not in {"fullscreen", "region"}:
+        cfg.capture.mode = "fullscreen"
 
     cfg.elevenlabs.api_key = os.getenv("ELEVENLABS_API_KEY", cfg.elevenlabs.api_key)
     cfg.elevenlabs.voice_id = os.getenv("ELEVENLABS_VOICE_ID", cfg.elevenlabs.voice_id)
@@ -269,8 +277,11 @@ output_format = "mp3_44100_128"
 
 [capture]
 hotkey = "ctrl+shift+n"
+mode = "fullscreen"
+region_hotkey = "ctrl+shift+r"
 stop_hotkey = "ctrl+shift+s"
 cooldown_ms = 1500
+min_region_px = 64
 
 [filter]
 min_block_chars = 140
@@ -337,8 +348,11 @@ output_format = {_toml_str(cfg.elevenlabs.output_format)}
 
 [capture]
 hotkey = {_toml_str(cfg.capture.hotkey)}
+mode = {_toml_str(cfg.capture.mode)}
+region_hotkey = {_toml_str(cfg.capture.region_hotkey)}
 stop_hotkey = {_toml_str(cfg.capture.stop_hotkey)}
 cooldown_ms = {cfg.capture.cooldown_ms}
+min_region_px = {cfg.capture.min_region_px}
 
 [filter]
 min_block_chars = {cfg.filter.min_block_chars}

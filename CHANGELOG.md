@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-03-05
+
+### Added
+
+- Region capture flow with click-drag selection overlay and dedicated hotkey (`ctrl+shift+r` by default).
+- Capture mode controls (`fullscreen`/`region`) with tray mode toggle and `Capture Region Now` action.
+- Centralized version resolver with version visibility in tray, settings UI, and CLI.
+- New CLI version commands: `snapnarrate version` and `snapnarrate --version`.
+- New config fields:
+  - `capture.mode`
+  - `capture.region_hotkey`
+  - `capture.min_region_px`
+- Settings UI fields for capture mode/region options and visible app version.
+- Unit tests for region capture flow and version reporting.
+
+### Changed
+
+- `doctor` now validates region capture settings (`capture.mode`, `capture.region_hotkey`, `capture.min_region_px`).
+
+## [0.3.1] - 2026-03-05
+
 ### Added
 
 - Usage and credits reporting service with normalized OpenAI + ElevenLabs snapshot output.

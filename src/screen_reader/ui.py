@@ -57,6 +57,8 @@ class SettingsUI:
         row += 1
         self._add_entry(frame, row, "OpenAI API Key", "openai.api_key", self.cfg.openai.api_key, show="*")
         row += 1
+        self._add_entry(frame, row, "OpenAI Admin API Key", "openai.admin_api_key", self.cfg.openai.admin_api_key, show="*")
+        row += 1
         self._add_entry(frame, row, "OpenAI Model", "openai.model", self.cfg.openai.model)
         row += 1
         self._add_entry(frame, row, "OpenAI Base URL", "openai.base_url", self.cfg.openai.base_url)
@@ -151,6 +153,16 @@ class SettingsUI:
         self._add_checkbox(frame, row, "Run At Startup", "app.run_at_startup", self.cfg.app.run_at_startup)
         row += 1
 
+        ttk.Separator(frame).grid(row=row, column=0, columnspan=2, sticky="ew", pady=8)
+        row += 1
+        ttk.Label(frame, text="Usage / Credits", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w", pady=(0, 4))
+        row += 1
+        budget_val = "" if self.cfg.usage.openai_monthly_budget_usd is None else str(self.cfg.usage.openai_monthly_budget_usd)
+        self._add_entry(frame, row, "OpenAI Monthly Budget (USD)", "usage.openai_monthly_budget_usd", budget_val)
+        row += 1
+        self._add_entry(frame, row, "Usage Cache Seconds", "usage.cache_seconds", str(self.cfg.usage.cache_seconds))
+        row += 1
+
         button_row = ttk.Frame(frame)
         button_row.grid(row=row, column=0, columnspan=2, sticky="e", pady=(10, 0))
         ttk.Button(button_row, text="Save", command=self._save).pack(side=tk.RIGHT, padx=(8, 0))
@@ -202,11 +214,18 @@ class SettingsUI:
     def _to_float(self, key: str) -> float:
         return float(str(self.vars[key].get()).strip())
 
+    def _to_optional_float(self, key: str) -> float | None:
+        raw = str(self.vars[key].get()).strip()
+        if raw == "":
+            return None
+        return float(raw)
+
     def _apply_form(self, cfg: AppConfig) -> AppConfig:
         cfg.vision.provider = str(self.vars["vision.provider"].get()).strip().lower()
         cfg.vision.timeout_sec = self._to_int("vision.timeout_sec")
 
         cfg.openai.api_key = str(self.vars["openai.api_key"].get()).strip()
+        cfg.openai.admin_api_key = str(self.vars["openai.admin_api_key"].get()).strip()
         cfg.openai.model = str(self.vars["openai.model"].get()).strip()
         cfg.openai.base_url = str(self.vars["openai.base_url"].get()).strip()
 
@@ -242,6 +261,8 @@ class SettingsUI:
         cfg.debug.screenshot_dir = str(self.vars["debug.screenshot_dir"].get()).strip()
         cfg.log_file = str(self.vars["log_file"].get()).strip()
         cfg.app.run_at_startup = bool(self.vars["app.run_at_startup"].get())
+        cfg.usage.openai_monthly_budget_usd = self._to_optional_float("usage.openai_monthly_budget_usd")
+        cfg.usage.cache_seconds = self._to_int("usage.cache_seconds")
         return cfg
 
     def _save(self) -> bool:

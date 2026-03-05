@@ -21,15 +21,21 @@ Screen Reader v2 is a Windows-first game narrator that captures screenshots, ext
 - Retry with exponential backoff, then skip on persistent TTS failure
 - Audio playback interruption support (`Stop Speaking`)
 - Tray controls:
-  - Pause/Resume
   - Capture Now
-  - Run At Startup toggle
-  - Settings
-  - Test Voice
   - Stop Speaking
+  - Pause/Resume
+  - Settings
+  - Run At Startup toggle
   - Show Hotkeys
+  - Test Voice
+  - Usage & Credits
   - Open Logs
   - Exit
+- Usage and credits visibility:
+  - `usage` CLI command with text/JSON output
+  - OpenAI usage/cost best-effort organization fetch with session-token fallback
+  - ElevenLabs subscription character credit reporting
+  - Configurable usage cache to avoid rate spikes
 - Desktop shortcut creation command
 - Startup shortcut management (Startup folder-based)
 - Tray icon loaded from project `.ico` asset with fallback to generated icon
@@ -51,6 +57,7 @@ Managed via `config.toml`:
 
 - `vision.provider`, `vision.timeout_sec`
 - `openai.api_key`, `openai.model`, `openai.base_url`
+- `openai.admin_api_key`
 - `ollama.base_url`, `ollama.model`, `ollama.keep_alive`
 - `ollama.num_predict`, `ollama.temperature`, `ollama.top_p`, `ollama.continuation_attempts`
 - `ollama.min_paragraphs`, `ollama.coverage_retry_attempts`
@@ -61,6 +68,7 @@ Managed via `config.toml`:
 - `playback.retry_count`, `playback.retry_backoff_ms`
 - `debug.save_screenshots`, `debug.screenshot_dir`
 - `app.run_at_startup`
+- `usage.openai_monthly_budget_usd`, `usage.cache_seconds`
 - `log_file`
 
 ## Diagnostics and Reliability
@@ -68,6 +76,7 @@ Managed via `config.toml`:
 - Structured runtime log file at `logs/screen-reader.log`
 - Hotkey registration status surfaced via tray notification and log entries
 - `doctor` validates required settings and warns when not elevated
+- `doctor` includes warning-level checks for OpenAI org usage endpoint access and ElevenLabs subscription endpoint reachability
 - Unit tests cover parser, dedup, pipeline retries, Ollama coverage behavior, startup/shortcut utilities, config round-trip, and audio payload handling
 
 ## Current Limitations

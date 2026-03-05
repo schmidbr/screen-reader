@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from screen_reader.models import ExtractResult
+from screen_reader.usage import record_openai_usage
 
 
 def parse_extraction_payload(raw_content: str) -> ExtractResult:
@@ -103,6 +104,9 @@ class OpenAIVisionExtractor:
             raise RuntimeError(f"OpenAI extraction failed ({response.status_code}): {response.text[:200]}")
 
         data = response.json()
+        usage_payload = data.get("usage")
+        if isinstance(usage_payload, dict):
+            record_openai_usage(usage_payload)
         raw_content = data["choices"][0]["message"]["content"]
         result = parse_extraction_payload(raw_content)
         logging.getLogger("screen_reader").info(

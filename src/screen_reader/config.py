@@ -13,6 +13,7 @@ DEFAULT_CONFIG_PATH = Path("config.toml")
 @dataclass
 class OpenAIConfig:
     api_key: str = ""
+    admin_api_key: str = ""
     model: str = "gpt-4.1-mini"
     base_url: str = "https://api.openai.com"
 
@@ -81,6 +82,12 @@ class AppBehaviorConfig:
 
 
 @dataclass
+class UsageConfig:
+    openai_monthly_budget_usd: float | None = None
+    cache_seconds: int = 60
+
+
+@dataclass
 class AppConfig:
     vision: VisionConfig
     openai: OpenAIConfig
@@ -92,6 +99,7 @@ class AppConfig:
     playback: PlaybackConfig
     debug: DebugConfig
     app: AppBehaviorConfig
+    usage: UsageConfig
     log_file: str = "logs/screen-reader.log"
 
 
@@ -116,6 +124,14 @@ def load_config(path: Path) -> AppConfig:
     playback_data = _section(content, "playback")
     debug_data = _section(content, "debug")
     app_data = _section(content, "app")
+    usage_data = _section(content, "usage")
+
+    raw_budget = usage_data.get("openai_monthly_budget_usd", None)
+    budget_value: float | None
+    if raw_budget in (None, ""):
+        budget_value = None
+    else:
+        budget_value = float(raw_budget)
 
     cfg = AppConfig(
         vision=VisionConfig(
@@ -124,6 +140,7 @@ def load_config(path: Path) -> AppConfig:
         ),
         openai=OpenAIConfig(
             api_key=str(openai_data.get("api_key", "")),
+            admin_api_key=str(openai_data.get("admin_api_key", "")),
             model=str(openai_data.get("model", OpenAIConfig.model)),
             base_url=str(openai_data.get("base_url", OpenAIConfig.base_url)),
         ),
@@ -170,10 +187,15 @@ def load_config(path: Path) -> AppConfig:
         app=AppBehaviorConfig(
             run_at_startup=bool(app_data.get("run_at_startup", AppBehaviorConfig.run_at_startup)),
         ),
+        usage=UsageConfig(
+            openai_monthly_budget_usd=budget_value,
+            cache_seconds=int(usage_data.get("cache_seconds", UsageConfig.cache_seconds)),
+        ),
         log_file=str(content.get("log_file", "logs/screen-reader.log")),
     )
 
     cfg.openai.api_key = os.getenv("OPENAI_API_KEY", cfg.openai.api_key)
+    cfg.openai.admin_api_key = os.getenv("OPENAI_ADMIN_API_KEY", cfg.openai.admin_api_key)
     cfg.openai.model = os.getenv("OPENAI_MODEL", cfg.openai.model)
     cfg.openai.base_url = os.getenv("OPENAI_BASE_URL", cfg.openai.base_url)
 
@@ -203,6 +225,10 @@ def load_config(path: Path) -> AppConfig:
     cfg.ollama.coverage_retry_attempts = int(
         os.getenv("OLLAMA_COVERAGE_RETRY_ATTEMPTS", str(cfg.ollama.coverage_retry_attempts))
     )
+    raw_budget_env = os.getenv("OPENAI_MONTHLY_BUDGET_USD")
+    if raw_budget_env is not None and raw_budget_env.strip() != "":
+        cfg.usage.openai_monthly_budget_usd = float(raw_budget_env)
+    cfg.usage.cache_seconds = int(os.getenv("USAGE_CACHE_SECONDS", str(cfg.usage.cache_seconds)))
 
     return cfg
 
@@ -220,6 +246,7 @@ timeout_sec = 60
 
 [openai]
 api_key = ""
+admin_api_key = ""
 model = "gpt-4.1-mini"
 base_url = "https://api.openai.com"
 
@@ -263,6 +290,10 @@ screenshot_dir = "debug_screenshots"
 
 [app]
 run_at_startup = false
+
+[usage]
+openai_monthly_budget_usd = ""
+cache_seconds = 60
 """
     path.write_text(template, encoding="utf-8")
     return path
@@ -283,6 +314,7 @@ timeout_sec = {cfg.vision.timeout_sec}
 
 [openai]
 api_key = {_toml_str(cfg.openai.api_key)}
+admin_api_key = {_toml_str(cfg.openai.admin_api_key)}
 model = {_toml_str(cfg.openai.model)}
 base_url = {_toml_str(cfg.openai.base_url)}
 
@@ -326,6 +358,10 @@ screenshot_dir = {_toml_str(cfg.debug.screenshot_dir)}
 
 [app]
 run_at_startup = {"true" if cfg.app.run_at_startup else "false"}
+
+[usage]
+openai_monthly_budget_usd = {"\"\"" if cfg.usage.openai_monthly_budget_usd is None else cfg.usage.openai_monthly_budget_usd}
+cache_seconds = {cfg.usage.cache_seconds}
 """
 
 

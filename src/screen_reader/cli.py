@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import json
 import sys
+import time
 from pathlib import Path
 
 from screen_reader.config import DEFAULT_CONFIG_PATH, init_config, load_config
@@ -13,6 +15,7 @@ from screen_reader.logging_utils import setup_logging
 from screen_reader.shortcuts import ShortcutManager
 from screen_reader.startup import StartupManager
 from screen_reader.ui import launch_settings_ui_with_startup
+from screen_reader.usage import UsageService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,6 +49,10 @@ def build_parser() -> argparse.ArgumentParser:
     startup_group.add_argument("--enable", action="store_true")
     startup_group.add_argument("--disable", action="store_true")
     startup_group.add_argument("--status", action="store_true")
+
+    usage = sub.add_parser("usage", help="Show OpenAI and ElevenLabs usage/credits")
+    usage.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    usage.add_argument("--json", action="store_true", dest="as_json")
 
     cfg = sub.add_parser("config", help="Config helpers")
     cfg_sub = cfg.add_subparsers(dest="config_command", required=True)
@@ -107,6 +114,7 @@ def run_command(config_path: Path, game_profile: str, auto_launch: bool = False)
             "hotkey": cfg.capture.hotkey,
             "stop_hotkey": cfg.capture.stop_hotkey,
             "log_path": Path(cfg.log_file),
+            "usage_service": UsageService.from_config(cfg),
         }
 
     target, args, workdir = launch_command(config_path, include_args=False)
@@ -136,6 +144,7 @@ def run_command(config_path: Path, game_profile: str, auto_launch: bool = False)
         config_path=config_path,
         reload_callback=build_runtime_parts,
         startup_manager=startup_manager,
+        usage_service=parts.get("usage_service"),  # type: ignore[arg-type]
         startup_notice=startup_notice,
     )
     runtime.start()
@@ -207,6 +216,24 @@ def doctor_command(config_path: Path) -> int:
     checks.append(("ELEVENLABS voice_id", bool(cfg.elevenlabs.voice_id), "Set elevenlabs.voice_id or ELEVENLABS_VOICE_ID", True))
     checks.append(("Capture hotkey configured", bool(cfg.capture.hotkey), cfg.capture.hotkey, True))
     checks.append(("Stop hotkey configured", bool(cfg.capture.stop_hotkey), cfg.capture.stop_hotkey, True))
+    usage_service = UsageService.from_config(cfg)
+    snapshot = usage_service.get_snapshot(force_refresh=True)
+    checks.append(
+        (
+            "OPENAI org usage access",
+            snapshot.openai.source == "organization" and snapshot.openai.status == "ok",
+            f"source={snapshot.openai.source} status={snapshot.openai.status}",
+            False,
+        )
+    )
+    checks.append(
+        (
+            "ELEVENLABS subscription reachable",
+            snapshot.elevenlabs.status == "ok",
+            f"status={snapshot.elevenlabs.status}",
+            False,
+        )
+    )
     try:
         is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:  # noqa: BLE001
@@ -301,6 +328,51 @@ def startup_command(config_path: Path, enable: bool, disable: bool, status: bool
     return 0
 
 
+def _fmt_usd(value: float | None) -> str:
+    if value is None:
+        return "unavailable"
+    return f"${value:,.4f}"
+
+
+def usage_command(config_path: Path, as_json: bool = False) -> int:
+    cfg = load_config(config_path)
+    snapshot = UsageService.from_config(cfg).get_snapshot(force_refresh=True)
+
+    if as_json:
+        print(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
+        return 0 if (snapshot.openai.status == "ok" or snapshot.elevenlabs.status == "ok") else 1
+
+    period = "n/a"
+    if snapshot.openai.period_start and snapshot.openai.period_end:
+        start = time.strftime("%Y-%m-%d", time.gmtime(snapshot.openai.period_start))
+        end = time.strftime("%Y-%m-%d", time.gmtime(snapshot.openai.period_end))
+        period = f"{start} .. {end}"
+
+    print("OpenAI")
+    print(f"  Status: {snapshot.openai.status}")
+    print(f"  Source: {snapshot.openai.source}")
+    print(f"  Period: {period}")
+    print(
+        "  Tokens: total={total} prompt={prompt} completion={completion}".format(
+            total=snapshot.openai.total_tokens,
+            prompt=snapshot.openai.prompt_tokens,
+            completion=snapshot.openai.completion_tokens,
+        )
+    )
+    print(f"  Cost (USD): {_fmt_usd(snapshot.openai.cost_usd)}")
+    print(f"  Remaining (USD): {_fmt_usd(snapshot.openai.remaining_usd)}")
+    print("")
+    print("ElevenLabs")
+    print(f"  Status: {snapshot.elevenlabs.status}")
+    print(f"  Characters used: {snapshot.elevenlabs.character_count if snapshot.elevenlabs.character_count is not None else 'unavailable'}")
+    print(f"  Character limit: {snapshot.elevenlabs.character_limit if snapshot.elevenlabs.character_limit is not None else 'unavailable'}")
+    print(
+        f"  Remaining characters: {snapshot.elevenlabs.remaining_characters if snapshot.elevenlabs.remaining_characters is not None else 'unavailable'}"
+    )
+    print(f"  Reset (unix): {snapshot.elevenlabs.next_reset_unix if snapshot.elevenlabs.next_reset_unix is not None else 'unavailable'}")
+    return 0 if (snapshot.openai.status == "ok" or snapshot.elevenlabs.status == "ok") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -338,6 +410,8 @@ def main(argv: list[str] | None = None) -> int:
         return install_shortcut_command(args.config)
     if args.command == "startup":
         return startup_command(args.config, args.enable, args.disable, args.status)
+    if args.command == "usage":
+        return usage_command(args.config, args.as_json)
     if args.command == "config" and args.config_command == "init":
         return config_init_command(args.config, args.force)
 

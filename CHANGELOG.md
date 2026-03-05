@@ -6,7 +6,22 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- No changes yet.
+- Usage and credits reporting service with normalized OpenAI + ElevenLabs snapshot output.
+- New CLI command: `screen-reader usage [--json]`.
+- Tray action: `Usage & Credits` notification summary.
+- OpenAI session token usage tracker for fallback reporting when org usage endpoints are unavailable.
+- ElevenLabs subscription usage endpoint integration (`/v1/user/subscription`).
+- New config fields:
+  - `openai.admin_api_key`
+  - `usage.openai_monthly_budget_usd`
+  - `usage.cache_seconds`
+- Settings UI fields for usage/admin-key configuration.
+- Unit tests for usage service behavior and config round-trip updates.
+
+### Changed
+
+- `doctor` now includes warning-level checks for OpenAI org usage access and ElevenLabs subscription endpoint reachability.
+- Tray item order reorganized to task-first flow for faster access to common actions.
 
 ## [0.3.0] - 2026-03-05
 

@@ -13,7 +13,8 @@ Windows game narrator that:
 - Ollama two-pass paragraph extraction to improve multi-paragraph coverage
 - Retry transient TTS failures, then skip
 - Deduplicate repeated text between captures
-- Tray controls: Pause/Resume, Capture Now, Run At Startup toggle, Settings, Test Voice, Stop Speaking, Open Logs, Exit
+- Usage and credits snapshot (OpenAI + ElevenLabs) via CLI and tray
+- Tray controls: Capture Now, Stop Speaking, Pause/Resume, Settings, Run At Startup toggle, Show Hotkeys, Test Voice, Usage & Credits, Open Logs, Exit
 - Settings window for keys and runtime config
 - Selectable vision provider (`openai` or `ollama`)
 
@@ -54,11 +55,13 @@ py -m screen_reader ui --config config.toml
 3. Fill in:
 - Vision provider (`openai` or `ollama`)
 - OpenAI API key/model/base URL (if using OpenAI)
+- Optional OpenAI admin API key for org-level usage/cost endpoints
 - Ollama base URL/model (if using Ollama)
 - Ollama extraction settings: `num_predict`, `min_paragraphs`, `coverage_retry_attempts`
 - ElevenLabs API key
 - ElevenLabs Voice ID
 - Keep `output_format = mp3_44100_128` unless you have a tier that supports PCM
+- Optional usage settings: monthly OpenAI budget and usage cache seconds
 
 4. Validate setup:
 
@@ -108,6 +111,10 @@ py -m screen_reader install-shortcut --config config.toml
 py -m screen_reader startup --status --config config.toml
 py -m screen_reader startup --enable --config config.toml
 py -m screen_reader startup --disable --config config.toml
+
+# Usage and remaining credits
+py -m screen_reader usage --config config.toml
+py -m screen_reader usage --config config.toml --json
 ```
 
 Shortcuts created by these commands launch with no arguments and rely on the EXE auto-run path.
@@ -136,7 +143,7 @@ Output:
 `config.toml` fields:
 - `vision.provider`, `vision.timeout_sec`
 - `openai.api_key`, `openai.model`
-- `openai.base_url`
+- `openai.admin_api_key`, `openai.base_url`
 - `ollama.base_url`, `ollama.model`, `ollama.keep_alive`
 - `ollama.num_predict`, `ollama.temperature`, `ollama.top_p`, `ollama.continuation_attempts`
 - `ollama.min_paragraphs`, `ollama.coverage_retry_attempts`
@@ -147,6 +154,7 @@ Output:
 - `playback.retry_count`, `playback.retry_backoff_ms`
 - `debug.save_screenshots`, `debug.screenshot_dir`
 - `app.run_at_startup`
+- `usage.openai_monthly_budget_usd`, `usage.cache_seconds`
 - `log_file`
 
 ## Security Notes

@@ -66,6 +66,32 @@ class ElevenLabsClient:
         voices = response.json().get("voices", [])
         return [(str(v.get("voice_id", "")), str(v.get("name", ""))) for v in voices]
 
+    def get_subscription_usage(self) -> dict[str, int | None]:
+        import requests
+
+        if not self.api_key:
+            raise ValueError("ElevenLabs API key is missing")
+
+        response = requests.get(
+            "https://api.elevenlabs.io/v1/user/subscription",
+            headers={"xi-api-key": self.api_key},
+            timeout=self.timeout_sec,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"ElevenLabs subscription failed ({response.status_code}): {response.text[:200]}")
+
+        payload = response.json()
+        character_count = int(payload.get("character_count", 0))
+        character_limit = int(payload.get("character_limit", 0))
+        next_reset = payload.get("next_character_count_reset_unix")
+        next_reset_unix = int(next_reset) if next_reset is not None else None
+        return {
+            "character_count": character_count,
+            "character_limit": character_limit,
+            "remaining_characters": max(character_limit - character_count, 0),
+            "next_reset_unix": next_reset_unix,
+        }
+
 
 class TempFileAudioPlayer:
     def __init__(self) -> None:

@@ -16,6 +16,7 @@ from screen_reader.icon_utils import load_tray_icon
 from screen_reader.capture import ScreenCapturer
 from screen_reader.pipeline import NarrationPipeline
 from screen_reader.startup import StartupManager
+from screen_reader.usage import UsageService
 
 
 @dataclass
@@ -35,6 +36,7 @@ class ScreenReaderRuntime:
         config_path: Path | None = None,
         reload_callback: Callable[[Path], dict[str, Any]] | None = None,
         startup_manager: StartupManager | None = None,
+        usage_service: UsageService | None = None,
         startup_notice: str | None = None,
     ) -> None:
         self.capturer = capturer
@@ -46,6 +48,7 @@ class ScreenReaderRuntime:
         self.config_path = config_path
         self.reload_callback = reload_callback
         self.startup_manager = startup_manager
+        self.usage_service = usage_service
         self.startup_notice = startup_notice
 
         self.state = RuntimeState(paused=False)
@@ -151,13 +154,14 @@ class ScreenReaderRuntime:
 
     def _tray_menu(self) -> Menu:
         return Menu(
-            MenuItem(lambda _: "Resume" if self.state.paused else "Pause", self._toggle_pause),
             MenuItem("Capture Now", self._tray_capture_now),
-            MenuItem(lambda _: f"Run At Startup: {'On' if self._is_startup_enabled() else 'Off'}", self._tray_toggle_startup),
-            MenuItem("Settings", self._tray_open_settings),
-            MenuItem("Test Voice", self._tray_test_voice),
             MenuItem("Stop Speaking", self._tray_stop_speaking),
+            MenuItem(lambda _: "Resume" if self.state.paused else "Pause", self._toggle_pause),
+            MenuItem("Settings", self._tray_open_settings),
+            MenuItem(lambda _: f"Run At Startup: {'On' if self._is_startup_enabled() else 'Off'}", self._tray_toggle_startup),
             MenuItem("Show Hotkeys", self._tray_show_hotkeys),
+            MenuItem("Test Voice", self._tray_test_voice),
+            MenuItem("Usage & Credits", self._tray_usage_credits),
             MenuItem("Open Logs", self._open_logs),
             MenuItem("Exit", self._tray_exit),
         )
@@ -226,6 +230,30 @@ class ScreenReaderRuntime:
             f"Stop: {self.stop_hotkey} ({'OK' if self._stop_hotkey_ok else 'FAILED'})"
         )
         self._notify(msg)
+
+    def _tray_usage_credits(self, icon: pystray.Icon, item: MenuItem) -> None:  # noqa: ARG002
+        try:
+            if self.usage_service is None:
+                if not self.config_path:
+                    self._notify("Usage unavailable: no config path")
+                    return
+                from screen_reader.config import load_config
+
+                self.usage_service = UsageService.from_config(load_config(self.config_path))
+            snapshot = self.usage_service.get_snapshot(force_refresh=True)
+            openai_msg = (
+                f"OpenAI {snapshot.openai.status} "
+                f"tokens={snapshot.openai.total_tokens} "
+                f"cost={'n/a' if snapshot.openai.cost_usd is None else f'${snapshot.openai.cost_usd:.4f}'}"
+            )
+            eleven_msg = (
+                f"ElevenLabs {snapshot.elevenlabs.status} "
+                f"remaining={'n/a' if snapshot.elevenlabs.remaining_characters is None else snapshot.elevenlabs.remaining_characters}"
+            )
+            self._notify(f"{openai_msg}\n{eleven_msg}")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("event=usage_snapshot_failed error=%s", exc)
+            self._notify(f"Usage fetch failed: {exc}")
 
     def _tray_open_settings(self, icon: pystray.Icon, item: MenuItem) -> None:  # noqa: ARG002
         if not self.config_path:
@@ -350,6 +378,9 @@ class ScreenReaderRuntime:
             self.hotkey = str(update.get("hotkey", self.hotkey))
             self.stop_hotkey = str(update.get("stop_hotkey", self.stop_hotkey))
             self.log_path = Path(update.get("log_path", self.log_path))
+            usage_service = update.get("usage_service")
+            if isinstance(usage_service, UsageService):
+                self.usage_service = usage_service
         keyboard.clear_all_hotkeys()
         self._register_hotkeys()
 

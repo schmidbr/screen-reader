@@ -28,6 +28,7 @@ def test_save_config_round_trip(tmp_path: Path) -> None:
     cfg.vision.provider = "ollama"
     cfg.vision.timeout_sec = 45
     cfg.openai.api_key = "k1"
+    cfg.openai.admin_api_key = "k1-admin"
     cfg.openai.base_url = "https://api.openai.com"
     cfg.ollama.base_url = "http://127.0.0.1:11434"
     cfg.ollama.model = "llava:latest"
@@ -48,6 +49,8 @@ def test_save_config_round_trip(tmp_path: Path) -> None:
     cfg.debug.save_screenshots = True
     cfg.log_file = "logs/custom.log"
     cfg.app.run_at_startup = True
+    cfg.usage.openai_monthly_budget_usd = 12.5
+    cfg.usage.cache_seconds = 42
 
     save_config(config_path, cfg)
     loaded = load_config(config_path)
@@ -55,6 +58,7 @@ def test_save_config_round_trip(tmp_path: Path) -> None:
     assert loaded.vision.provider == "ollama"
     assert loaded.vision.timeout_sec == 45
     assert loaded.openai.api_key == "k1"
+    assert loaded.openai.admin_api_key == "k1-admin"
     assert loaded.openai.base_url == "https://api.openai.com"
     assert loaded.ollama.base_url == "http://127.0.0.1:11434"
     assert loaded.ollama.model == "llava:latest"
@@ -75,3 +79,5 @@ def test_save_config_round_trip(tmp_path: Path) -> None:
     assert loaded.debug.save_screenshots is True
     assert loaded.log_file == "logs/custom.log"
     assert loaded.app.run_at_startup is True
+    assert loaded.usage.openai_monthly_budget_usd == 12.5
+    assert loaded.usage.cache_seconds == 42

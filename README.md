@@ -1,9 +1,6 @@
 ﻿# SnapNarrate
 
-Windows game narrator that:
-1. Captures the screen on hotkey press
-2. Extracts long-form narrative text with OpenAI or Ollama vision
-3. Speaks it with ElevenLabs
+﻿# SnapNarrate is a lightweight desktop tool designed to make reading long blocks of in-game text effortless. With a simple hotkey press, the application captures a screenshot of the current game screen and uses AI vision models (via OpenAI or Ollama) to identify and extract the main narrative text while filtering out UI clutter such as inventory items, prompts, and HUD elements. The cleaned text is then sent to ElevenLabs for high-quality text-to-speech, allowing the game’s dialogue, lore, or story passages to be read aloud in real time. This enables players to continue playing without stopping to read large text sections, improving accessibility and immersion during gameplay.
 
 ## What It Can Do
 

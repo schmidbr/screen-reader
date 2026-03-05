@@ -5,6 +5,17 @@ __pycache__/
 *.pyd
 .venv/
 venv/
+.pytest_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Runtime output
+logs/
+debug_screenshots/
+config.toml
 
 # Editor / OS
 .vscode/

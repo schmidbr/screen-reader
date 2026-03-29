@@ -13,10 +13,25 @@ Bounds = Tuple[int, int, int, int]
 
 
 class ScreenCapturer:
-    def __init__(self, cooldown_ms: int, save_debug: bool = False, debug_dir: str = "debug_screenshots") -> None:
+    def __init__(
+        self,
+        cooldown_ms: int,
+        save_debug: bool = False,
+        debug_dir: str = "debug_screenshots",
+        max_dimension: int = 1600,
+        image_format: str = "jpeg",
+        jpeg_quality: int = 85,
+    ) -> None:
         self.cooldown_ms = cooldown_ms
         self.save_debug = save_debug
         self.debug_dir = Path(debug_dir)
+        self.max_dimension = max(int(max_dimension), 0)
+        self.image_format = str(image_format).strip().lower()
+        if self.image_format == "jpg":
+            self.image_format = "jpeg"
+        if self.image_format not in {"png", "jpeg"}:
+            self.image_format = "jpeg"
+        self.jpeg_quality = min(max(int(jpeg_quality), 1), 100)
         self._last_capture_ms = 0
 
     def can_capture(self) -> bool:
@@ -57,16 +72,36 @@ class ScreenCapturer:
     def _capture_monitor_png(self, sct: mss, monitor: dict) -> bytes:
         shot = sct.grab(monitor)
         image = Image.frombytes("RGB", shot.size, shot.rgb)
+        image = self._prepare_image(image)
         buf = io.BytesIO()
-        image.save(buf, format="PNG")
+        if self.image_format == "jpeg":
+            image.save(buf, format="JPEG", quality=self.jpeg_quality, optimize=True)
+        else:
+            image.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
+
+    def _prepare_image(self, image: Image.Image) -> Image.Image:
+        if self.max_dimension <= 0:
+            return image
+        width, height = image.size
+        largest_edge = max(width, height)
+        if largest_edge <= self.max_dimension:
+            return image
+        scale = self.max_dimension / float(largest_edge)
+        new_size = (
+            max(1, int(round(width * scale))),
+            max(1, int(round(height * scale))),
+        )
+        resampling = getattr(Image, "Resampling", Image)
+        return image.resize(new_size, resampling.LANCZOS)
 
     def _after_capture(self, image_bytes: bytes) -> None:
         self._last_capture_ms = int(time.time() * 1000)
         if self.save_debug:
             self.debug_dir.mkdir(parents=True, exist_ok=True)
             timestamp = int(time.time())
-            (self.debug_dir / f"capture_{timestamp}.png").write_bytes(image_bytes)
+            extension = "jpg" if self.image_format == "jpeg" else "png"
+            (self.debug_dir / f"capture_{timestamp}.{extension}").write_bytes(image_bytes)
 
 
 def normalize_bounds(x1: int, y1: int, x2: int, y2: int) -> Bounds:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snapnarrate"
-version = "0.3.2"
+version = "0.3.9"
 description = "SnapNarrate game narrator using OpenAI vision and ElevenLabs"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,4 +32,8 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
 

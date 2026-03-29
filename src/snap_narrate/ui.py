@@ -54,6 +54,10 @@ class SettingsUI:
         row += 1
         self._add_entry(frame, row, "Vision Timeout (sec)", "vision.timeout_sec", str(self.cfg.vision.timeout_sec))
         row += 1
+        self._add_checkbox(frame, row, "Fast Extraction Mode", "vision.fast_mode", self.cfg.vision.fast_mode)
+        row += 1
+        self._add_checkbox(frame, row, "Ultra-Fast Trigger Mode", "vision.ultra_fast_mode", self.cfg.vision.ultra_fast_mode)
+        row += 1
 
         ttk.Separator(frame).grid(row=row, column=0, columnspan=2, sticky="ew", pady=8)
         row += 1
@@ -65,6 +69,8 @@ class SettingsUI:
         row += 1
         self._add_entry(frame, row, "OpenAI Model", "openai.model", self.cfg.openai.model)
         row += 1
+        self._add_entry(frame, row, "OpenAI Ultra-Fast Model", "openai.ultra_fast_model", self.cfg.openai.ultra_fast_model)
+        row += 1
         self._add_entry(frame, row, "OpenAI Base URL", "openai.base_url", self.cfg.openai.base_url)
         row += 1
 
@@ -75,6 +81,8 @@ class SettingsUI:
         self._add_entry(frame, row, "Ollama Base URL", "ollama.base_url", self.cfg.ollama.base_url)
         row += 1
         self._add_entry(frame, row, "Ollama Model", "ollama.model", self.cfg.ollama.model)
+        row += 1
+        self._add_entry(frame, row, "Ollama Ultra-Fast Model", "ollama.ultra_fast_model", self.cfg.ollama.ultra_fast_model)
         row += 1
         self._add_entry(frame, row, "Ollama Keep Alive", "ollama.keep_alive", self.cfg.ollama.keep_alive)
         row += 1
@@ -113,6 +121,14 @@ class SettingsUI:
         row += 1
         self._add_entry(frame, row, "Model ID", "elevenlabs.model_id", self.cfg.elevenlabs.model_id)
         row += 1
+        self._add_entry(
+            frame,
+            row,
+            "Speech-Fast Model ID",
+            "elevenlabs.speech_fast_model_id",
+            self.cfg.elevenlabs.speech_fast_model_id,
+        )
+        row += 1
         self._add_entry(frame, row, "Output Format", "elevenlabs.output_format", self.cfg.elevenlabs.output_format)
         row += 1
 
@@ -132,6 +148,12 @@ class SettingsUI:
         row += 1
         self._add_entry(frame, row, "Min Region Size (px)", "capture.min_region_px", str(self.cfg.capture.min_region_px))
         row += 1
+        self._add_entry(frame, row, "Max Capture Dimension (px, 0 = off)", "capture.max_dimension", str(self.cfg.capture.max_dimension))
+        row += 1
+        self._add_combobox(frame, row, "Capture Image Format", "capture.image_format", self.cfg.capture.image_format, ["jpeg", "png"])
+        row += 1
+        self._add_entry(frame, row, "JPEG Quality", "capture.jpeg_quality", str(self.cfg.capture.jpeg_quality))
+        row += 1
 
         ttk.Separator(frame).grid(row=row, column=0, columnspan=2, sticky="ew", pady=8)
         row += 1
@@ -148,6 +170,14 @@ class SettingsUI:
         self._add_entry(frame, row, "Retry Count", "playback.retry_count", str(self.cfg.playback.retry_count))
         row += 1
         self._add_entry(frame, row, "Retry Backoff (ms)", "playback.retry_backoff_ms", str(self.cfg.playback.retry_backoff_ms))
+        row += 1
+        self._add_checkbox(frame, row, "Speech-First Playback", "playback.speech_first_enabled", self.cfg.playback.speech_first_enabled)
+        row += 1
+        self._add_entry(frame, row, "Initial Speech Chunk (chars)", "playback.initial_chunk_chars", str(self.cfg.playback.initial_chunk_chars))
+        row += 1
+        self._add_entry(frame, row, "Follow-Up Chunk (chars)", "playback.followup_chunk_chars", str(self.cfg.playback.followup_chunk_chars))
+        row += 1
+        self._add_entry(frame, row, "Follow-Up Min Chars", "playback.followup_min_chars", str(self.cfg.playback.followup_min_chars))
         row += 1
 
         ttk.Separator(frame).grid(row=row, column=0, columnspan=2, sticky="ew", pady=8)
@@ -233,14 +263,18 @@ class SettingsUI:
     def _apply_form(self, cfg: AppConfig) -> AppConfig:
         cfg.vision.provider = str(self.vars["vision.provider"].get()).strip().lower()
         cfg.vision.timeout_sec = self._to_int("vision.timeout_sec")
+        cfg.vision.fast_mode = bool(self.vars["vision.fast_mode"].get())
+        cfg.vision.ultra_fast_mode = bool(self.vars["vision.ultra_fast_mode"].get())
 
         cfg.openai.api_key = str(self.vars["openai.api_key"].get()).strip()
         cfg.openai.admin_api_key = str(self.vars["openai.admin_api_key"].get()).strip()
         cfg.openai.model = str(self.vars["openai.model"].get()).strip()
+        cfg.openai.ultra_fast_model = str(self.vars["openai.ultra_fast_model"].get()).strip()
         cfg.openai.base_url = str(self.vars["openai.base_url"].get()).strip()
 
         cfg.ollama.base_url = str(self.vars["ollama.base_url"].get()).strip()
         cfg.ollama.model = str(self.vars["ollama.model"].get()).strip()
+        cfg.ollama.ultra_fast_model = str(self.vars["ollama.ultra_fast_model"].get()).strip()
         cfg.ollama.keep_alive = str(self.vars["ollama.keep_alive"].get()).strip()
         cfg.ollama.num_predict = self._to_int("ollama.num_predict")
         cfg.ollama.temperature = self._to_float("ollama.temperature")
@@ -252,6 +286,7 @@ class SettingsUI:
         cfg.elevenlabs.api_key = str(self.vars["elevenlabs.api_key"].get()).strip()
         cfg.elevenlabs.voice_id = str(self.vars["elevenlabs.voice_id"].get()).strip()
         cfg.elevenlabs.model_id = str(self.vars["elevenlabs.model_id"].get()).strip()
+        cfg.elevenlabs.speech_fast_model_id = str(self.vars["elevenlabs.speech_fast_model_id"].get()).strip()
         cfg.elevenlabs.output_format = str(self.vars["elevenlabs.output_format"].get()).strip()
 
         cfg.capture.hotkey = str(self.vars["capture.hotkey"].get()).strip()
@@ -260,6 +295,9 @@ class SettingsUI:
         cfg.capture.stop_hotkey = str(self.vars["capture.stop_hotkey"].get()).strip()
         cfg.capture.cooldown_ms = self._to_int("capture.cooldown_ms")
         cfg.capture.min_region_px = self._to_int("capture.min_region_px")
+        cfg.capture.max_dimension = self._to_int("capture.max_dimension")
+        cfg.capture.image_format = str(self.vars["capture.image_format"].get()).strip().lower()
+        cfg.capture.jpeg_quality = self._to_int("capture.jpeg_quality")
 
         cfg.filter.min_block_chars = self._to_int("filter.min_block_chars")
         cfg.filter.ignore_short_lines = self._to_int("filter.ignore_short_lines")
@@ -269,6 +307,10 @@ class SettingsUI:
 
         cfg.playback.retry_count = self._to_int("playback.retry_count")
         cfg.playback.retry_backoff_ms = self._to_int("playback.retry_backoff_ms")
+        cfg.playback.speech_first_enabled = bool(self.vars["playback.speech_first_enabled"].get())
+        cfg.playback.initial_chunk_chars = self._to_int("playback.initial_chunk_chars")
+        cfg.playback.followup_chunk_chars = self._to_int("playback.followup_chunk_chars")
+        cfg.playback.followup_min_chars = self._to_int("playback.followup_min_chars")
 
         cfg.debug.save_screenshots = bool(self.vars["debug.save_screenshots"].get())
         cfg.debug.screenshot_dir = str(self.vars["debug.screenshot_dir"].get()).strip()

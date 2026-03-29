@@ -40,7 +40,12 @@ def launch_command(config_path: Path, include_args: bool = True) -> tuple[str, s
 
     # Dev mode / non-frozen fallback.
     python_bin = str(executable_target())
-    args = f'-m snap_narrate run --config "{cfg}" --game-profile default' if include_args else "-m snap_narrate"
+    dev_entrypoint = Path(__file__).resolve().parents[1] / "main.py"
+    args = (
+        f'"{dev_entrypoint}" run --config "{cfg}" --game-profile default'
+        if include_args
+        else f'"{dev_entrypoint}"'
+    )
     workdir = str(Path.cwd())
     return python_bin, args, workdir
 

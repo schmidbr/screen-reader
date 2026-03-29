@@ -16,6 +16,7 @@ from snap_narrate.icon_utils import load_tray_icon
 from snap_narrate.capture import Bounds, ScreenCapturer, is_valid_bounds
 from snap_narrate.pipeline import NarrationPipeline
 from snap_narrate.region_selector import select_region_bounds
+from snap_narrate.self_test import create_self_test_image_bytes
 from snap_narrate.startup import StartupManager
 from snap_narrate.usage import UsageService
 from snap_narrate.versioning import get_app_version
@@ -70,6 +71,8 @@ class SnapNarrateRuntime:
         self._work_event = threading.Event()
         self._lock = threading.Lock()
         self._pending_capture: bytes | None = None
+        self._pending_source = "unknown"
+        self._pending_capture_ms = 0
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._icon: pystray.Icon | None = None
         self._capture_hotkey_ok = False
@@ -77,6 +80,8 @@ class SnapNarrateRuntime:
         self._stop_hotkey_ok = False
         self._settings_open = False
         self._settings_lock = threading.Lock()
+        self._self_test_running = False
+        self._self_test_lock = threading.Lock()
         self._config_mtime: float | None = self._read_config_mtime()
         self._last_reload_check = 0.0
 
@@ -127,22 +132,30 @@ class SnapNarrateRuntime:
         self.logger.info("event=fullscreen_hotkey_pressed paused=%s", self.state.paused)
         if self.state.paused:
             self.logger.info("event=capture_ignored reason=paused")
+            self._notify("Capture ignored: paused")
             return
+        self._notify("Hotkey pressed: capturing full screen")
 
         try:
+            capture_start = time.perf_counter()
             image_bytes = self.capturer.capture_fullscreen_png()
+            capture_ms = int(round((time.perf_counter() - capture_start) * 1000))
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("event=capture_failed error=%s", exc)
             self._notify(f"Capture failed: {exc}")
             return
 
-        self._enqueue_capture(image_bytes)
+        self._play_capture_sound()
+        self.logger.info("event=fullscreen_capture_ready capture_ms=%s bytes=%s", capture_ms, len(image_bytes))
+        self._enqueue_capture(image_bytes, source="fullscreen", capture_ms=capture_ms)
 
     def _on_region_hotkey(self) -> None:
         self.logger.info("event=region_hotkey_pressed paused=%s", self.state.paused)
         if self.state.paused:
             self.logger.info("event=capture_ignored reason=paused")
+            self._notify("Capture ignored: paused")
             return
+        self._notify("Hotkey pressed: select a region")
         self._capture_region_once()
 
     def _worker_loop(self) -> None:
@@ -154,7 +167,11 @@ class SnapNarrateRuntime:
 
             with self._lock:
                 capture = self._pending_capture
+                source = self._pending_source
+                capture_ms = self._pending_capture_ms
                 self._pending_capture = None
+                self._pending_source = "unknown"
+                self._pending_capture_ms = 0
                 pipeline = self.pipeline
 
             if not capture:
@@ -167,7 +184,25 @@ class SnapNarrateRuntime:
                 self._notify(f"Narration failed: {exc}")
                 continue
 
-            self.logger.info("event=pipeline_result status=%s message=%s chars=%s", result.status, result.message, result.chars)
+            self.logger.info(
+                "event=pipeline_result status=%s message=%s chars=%s source=%s capture_ms=%s",
+                result.status,
+                result.message,
+                result.chars,
+                source,
+                capture_ms,
+            )
+            if result.timings is not None:
+                self.logger.info(
+                    "event=interaction_latency source=%s capture_ms=%s extract_ms=%s tts_ms=%s playback_ms=%s pipeline_ms=%s total_ms=%s",
+                    source,
+                    capture_ms,
+                    result.timings.extract_ms,
+                    result.timings.tts_ms,
+                    result.timings.playback_ms,
+                    result.timings.total_ms,
+                    capture_ms + result.timings.total_ms,
+                )
             if result.status != "played":
                 self._notify(result.message)
 
@@ -183,6 +218,7 @@ class SnapNarrateRuntime:
             MenuItem(lambda _: f"Run At Startup: {'On' if self._is_startup_enabled() else 'Off'}", self._tray_toggle_startup),
             MenuItem("Show Hotkeys", self._tray_show_hotkeys),
             MenuItem("Test Voice", self._tray_test_voice),
+            MenuItem("Run Self-Test", self._tray_run_self_test),
             MenuItem("Usage & Credits", self._tray_usage_credits),
             MenuItem("Open Logs", self._open_logs),
             MenuItem("Exit", self._tray_exit),
@@ -212,6 +248,22 @@ class SnapNarrateRuntime:
             self.logger.warning("event=voice_test_failed error=%s", exc)
             self._notify(f"Voice test failed: {exc}")
 
+    def _tray_run_self_test(self, icon: pystray.Icon, item: MenuItem) -> None:  # noqa: ARG002
+        with self._self_test_lock:
+            if self._self_test_running:
+                self._notify("Self-test already running")
+                return
+            self._self_test_running = True
+
+        def run_self_test() -> None:
+            try:
+                self._run_self_test()
+            finally:
+                with self._self_test_lock:
+                    self._self_test_running = False
+
+        threading.Thread(target=run_self_test, daemon=True).start()
+
     def _toggle_pause(self, icon: pystray.Icon, item: MenuItem) -> None:  # noqa: ARG002
         self.state.paused = not self.state.paused
         self.logger.info("event=pause_toggled paused=%s", self.state.paused)
@@ -225,7 +277,8 @@ class SnapNarrateRuntime:
         self._stop_speaking(silent=False)
 
     def _stop_speaking(self, silent: bool = True) -> None:
-        stop_fn = getattr(self.pipeline.player, "stop", None)
+        player = getattr(self.pipeline, "player", None)
+        stop_fn = getattr(player, "stop", None)
         if not callable(stop_fn):
             if not silent:
                 self._notify("Stop not supported by current audio player")
@@ -453,19 +506,64 @@ class SnapNarrateRuntime:
                 self.logger.info("event=region_capture_skipped reason=invalid_or_cancelled bounds=%s", bounds)
                 self._notify("Region capture cancelled or too small")
                 return
+            capture_start = time.perf_counter()
             image_bytes = self.capturer.capture_region_png(bounds)
+            capture_ms = int(round((time.perf_counter() - capture_start) * 1000))
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("event=region_capture_failed error=%s", exc)
             self._notify(f"Region capture failed: {exc}")
             return
-        self.logger.info("event=region_capture_success bounds=%s", bounds)
-        self._enqueue_capture(image_bytes)
+        self.logger.info("event=region_capture_success bounds=%s capture_ms=%s", bounds, capture_ms)
+        self._play_capture_sound()
+        self._enqueue_capture(image_bytes, source="region", capture_ms=capture_ms)
 
-    def _enqueue_capture(self, image_bytes: bytes) -> None:
+    def _run_self_test(self) -> None:
+        self.logger.info("event=self_test_started source=tray")
+        self._notify("Running self-test")
+        self._stop_speaking(silent=True)
+        try:
+            image_format = getattr(self.capturer, "image_format", "png")
+            max_dimension = int(getattr(self.capturer, "max_dimension", 1400))
+            jpeg_quality = int(getattr(self.capturer, "jpeg_quality", 90))
+            image_bytes = create_self_test_image_bytes(
+                max_dimension=max_dimension,
+                image_format=image_format,
+                jpeg_quality=jpeg_quality,
+            )
+            result = self.pipeline.process_self_test(image_bytes=image_bytes, game_profile="self-test")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("event=self_test_failed error=%s", exc)
+            self._notify(f"Self-test failed: {exc}")
+            return
+
+        self.logger.info(
+            "event=self_test_completed status=%s message=%s chars=%s total_ms=%s",
+            result.status,
+            result.message,
+            result.chars,
+            result.timings.total_ms if result.timings is not None else 0,
+        )
+        if result.status == "played":
+            total_ms = result.timings.total_ms if result.timings is not None else 0
+            self._notify(f"Self-test passed in {total_ms} ms")
+            return
+        self._notify(f"Self-test failed: {result.message}")
+
+    def _enqueue_capture(self, image_bytes: bytes, source: str = "unknown", capture_ms: int = 0) -> None:
         with self._lock:
             self._pending_capture = image_bytes
+            self._pending_source = source
+            self._pending_capture_ms = int(capture_ms)
             self._work_event.set()
-        self.logger.info("event=capture_enqueued bytes=%s", len(image_bytes))
+        self.logger.info("event=capture_enqueued bytes=%s source=%s capture_ms=%s", len(image_bytes), source, capture_ms)
+
+    def _play_capture_sound(self) -> None:
+        try:
+            import winsound
+
+            winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("event=capture_sound_failed error=%s", exc)
 
     @staticmethod
     def _make_icon() -> Image.Image:

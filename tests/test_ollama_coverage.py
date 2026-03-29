@@ -6,7 +6,7 @@ from snap_narrate.openai_client import OllamaVisionExtractor
 
 
 class FakeOllamaExtractor(OllamaVisionExtractor):
-    def __init__(self, responses: list[dict[str, str]]) -> None:
+    def __init__(self, responses: list[dict[str, str]], fast_mode: bool = False) -> None:
         super().__init__(
             base_url="http://localhost:11434",
             model="fake",
@@ -19,6 +19,7 @@ class FakeOllamaExtractor(OllamaVisionExtractor):
             continuation_attempts=1,
             min_paragraphs=2,
             coverage_retry_attempts=1,
+            fast_mode=fast_mode,
         )
         self._responses = responses
         self.calls = 0
@@ -70,4 +71,27 @@ def test_ollama_finalize_fallback_joins_paragraphs_when_pass2_empty() -> None:
     result = extractor.extract_narrative_text(b"img", "default")
     assert "Para A" in result.text
     assert "Para B" in result.text
+
+
+def test_ollama_fast_mode_skips_retry_and_finalize() -> None:
+    responses = [
+        {
+            "response": json.dumps(
+                {
+                    "paragraphs": [
+                        {"index": 0, "text": "P1", "confidence": 0.9},
+                        {"index": 1, "text": "P2", "confidence": 0.8},
+                    ],
+                    "dropped_reason": None,
+                }
+            )
+        }
+    ]
+    extractor = FakeOllamaExtractor(responses, fast_mode=True)
+
+    result = extractor.extract_narrative_text(b"img", "default")
+
+    assert result.text == "P1\n\nP2"
+    assert result.dropped_reason == "fast_mode_join"
+    assert extractor.calls == 1
 

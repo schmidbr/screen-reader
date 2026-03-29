@@ -14,6 +14,7 @@ from snap_narrate.launch import launch_command, resolve_default_config_path
 from snap_narrate.logging_utils import setup_logging
 from snap_narrate.shortcuts import ShortcutManager
 from snap_narrate.startup import StartupManager
+from snap_narrate.self_test import create_self_test_image_bytes
 from snap_narrate.ui import launch_settings_ui_with_startup
 from snap_narrate.usage import UsageService
 from snap_narrate.versioning import get_app_version
@@ -38,6 +39,10 @@ def build_parser() -> argparse.ArgumentParser:
     test_capture = sub.add_parser("test-capture", help="Take one screenshot and print extraction output")
     test_capture.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     test_capture.add_argument("--game-profile", default="default")
+
+    self_test = sub.add_parser("self-test", help="Run a fixture-based extraction to playback self-test")
+    self_test.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    self_test.add_argument("--game-profile", default="default")
 
     ui = sub.add_parser("ui", help="Open desktop settings UI")
     ui.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
@@ -81,50 +86,60 @@ def _required_settings_missing(cfg: object) -> bool:
     return True
 
 
-def run_command(config_path: Path, game_profile: str, auto_launch: bool = False) -> int:
+def build_runtime_parts(config_file: Path) -> dict[str, object]:
     from snap_narrate.capture import ScreenCapturer
     from snap_narrate.elevenlabs_client import ElevenLabsClient, TempFileAudioPlayer
     from snap_narrate.pipeline import NarrationPipeline
+
+    cfg = load_config(config_file)
+    extractor = build_extractor(cfg)
+    tts = ElevenLabsClient(
+        api_key=cfg.elevenlabs.api_key,
+        voice_id=cfg.elevenlabs.voice_id,
+        model_id=cfg.elevenlabs.model_id,
+        speech_fast_model_id=cfg.elevenlabs.speech_fast_model_id,
+        output_format=cfg.elevenlabs.output_format,
+    )
+    player = TempFileAudioPlayer()
+    pipeline = NarrationPipeline(
+        extractor=extractor,
+        tts=tts,
+        player=player,
+        min_block_chars=cfg.filter.min_block_chars,
+        dedup_enabled=cfg.dedup.enabled,
+        dedup_similarity_threshold=cfg.dedup.similarity_threshold,
+        retry_count=cfg.playback.retry_count,
+        retry_backoff_ms=cfg.playback.retry_backoff_ms,
+        speech_first_enabled=cfg.playback.speech_first_enabled,
+        initial_chunk_chars=cfg.playback.initial_chunk_chars,
+        followup_chunk_chars=cfg.playback.followup_chunk_chars,
+        followup_min_chars=cfg.playback.followup_min_chars,
+    )
+    capturer = ScreenCapturer(
+        cooldown_ms=cfg.capture.cooldown_ms,
+        save_debug=cfg.debug.save_screenshots,
+        debug_dir=cfg.debug.screenshot_dir,
+        max_dimension=cfg.capture.max_dimension,
+        image_format=cfg.capture.image_format,
+        jpeg_quality=cfg.capture.jpeg_quality,
+    )
+    return {
+        "capturer": capturer,
+        "pipeline": pipeline,
+        "hotkey": cfg.capture.hotkey,
+        "region_hotkey": cfg.capture.region_hotkey,
+        "stop_hotkey": cfg.capture.stop_hotkey,
+        "capture_mode": cfg.capture.mode,
+        "min_region_px": cfg.capture.min_region_px,
+        "log_path": Path(cfg.log_file),
+        "usage_service": UsageService.from_config(cfg),
+    }
+
+
+def run_command(config_path: Path, game_profile: str, auto_launch: bool = False) -> int:
     from snap_narrate.runtime import SnapNarrateRuntime
 
-    def build_runtime_parts(config_file: Path) -> dict[str, object]:
-        cfg = load_config(config_file)
-        extractor = build_extractor(cfg)
-        tts = ElevenLabsClient(
-            api_key=cfg.elevenlabs.api_key,
-            voice_id=cfg.elevenlabs.voice_id,
-            model_id=cfg.elevenlabs.model_id,
-            output_format=cfg.elevenlabs.output_format,
-        )
-        player = TempFileAudioPlayer()
-        pipeline = NarrationPipeline(
-            extractor=extractor,
-            tts=tts,
-            player=player,
-            min_block_chars=cfg.filter.min_block_chars,
-            dedup_enabled=cfg.dedup.enabled,
-            dedup_similarity_threshold=cfg.dedup.similarity_threshold,
-            retry_count=cfg.playback.retry_count,
-            retry_backoff_ms=cfg.playback.retry_backoff_ms,
-        )
-        capturer = ScreenCapturer(
-            cooldown_ms=cfg.capture.cooldown_ms,
-            save_debug=cfg.debug.save_screenshots,
-            debug_dir=cfg.debug.screenshot_dir,
-        )
-        return {
-            "capturer": capturer,
-            "pipeline": pipeline,
-            "hotkey": cfg.capture.hotkey,
-            "region_hotkey": cfg.capture.region_hotkey,
-            "stop_hotkey": cfg.capture.stop_hotkey,
-            "capture_mode": cfg.capture.mode,
-            "min_region_px": cfg.capture.min_region_px,
-            "log_path": Path(cfg.log_file),
-            "usage_service": UsageService.from_config(cfg),
-        }
-
-    target, args, workdir = launch_command(config_path, include_args=False)
+    target, args, workdir = launch_command(config_path)
     icon_path = str(icon_asset_path()) if icon_asset_path().exists() else None
     startup_manager = StartupManager(ShortcutManager(), target=target, arguments=args, working_dir=workdir, icon_path=icon_path)
 
@@ -170,13 +185,17 @@ def doctor_command(config_path: Path) -> int:
     checks.append(("Config file exists", config_path.exists(), str(config_path), True))
     checks.append(("Vision provider", cfg.vision.provider in {"openai", "ollama"}, cfg.vision.provider, True))
     checks.append(("Vision timeout_sec", cfg.vision.timeout_sec > 0, str(cfg.vision.timeout_sec), True))
+    checks.append(("Vision fast_mode", isinstance(cfg.vision.fast_mode, bool), str(cfg.vision.fast_mode), True))
+    checks.append(("Vision ultra_fast_mode", isinstance(cfg.vision.ultra_fast_mode, bool), str(cfg.vision.ultra_fast_mode), True))
     if cfg.vision.provider == "openai":
         checks.append(("OPENAI key", bool(cfg.openai.api_key), "Set openai.api_key or OPENAI_API_KEY", True))
         checks.append(("OPENAI model", bool(cfg.openai.model), cfg.openai.model, True))
+        checks.append(("OPENAI ultra_fast_model", True, cfg.openai.ultra_fast_model or "(using primary model)", False))
         checks.append(("OPENAI base_url", bool(cfg.openai.base_url), cfg.openai.base_url, True))
     if cfg.vision.provider == "ollama":
         checks.append(("OLLAMA base_url", bool(cfg.ollama.base_url), cfg.ollama.base_url, True))
         checks.append(("OLLAMA model", bool(cfg.ollama.model), cfg.ollama.model, True))
+        checks.append(("OLLAMA ultra_fast_model", True, cfg.ollama.ultra_fast_model or "(using primary model)", False))
         checks.append(("OLLAMA num_predict", cfg.ollama.num_predict > 0, str(cfg.ollama.num_predict), True))
         checks.append(("OLLAMA temperature", 0 <= cfg.ollama.temperature <= 2, str(cfg.ollama.temperature), True))
         checks.append(("OLLAMA top_p", 0 < cfg.ollama.top_p <= 1, str(cfg.ollama.top_p), True))
@@ -224,11 +243,30 @@ def doctor_command(config_path: Path) -> int:
 
     checks.append(("ELEVENLABS key", bool(cfg.elevenlabs.api_key), "Set elevenlabs.api_key or ELEVENLABS_API_KEY", True))
     checks.append(("ELEVENLABS voice_id", bool(cfg.elevenlabs.voice_id), "Set elevenlabs.voice_id or ELEVENLABS_VOICE_ID", True))
+    checks.append(
+        (
+            "ELEVENLABS speech_fast_model_id",
+            True,
+            cfg.elevenlabs.speech_fast_model_id or "(using primary model)",
+            False,
+        )
+    )
     checks.append(("Capture hotkey configured", bool(cfg.capture.hotkey), cfg.capture.hotkey, True))
     checks.append(("Region hotkey configured", bool(cfg.capture.region_hotkey), cfg.capture.region_hotkey, True))
     checks.append(("Stop hotkey configured", bool(cfg.capture.stop_hotkey), cfg.capture.stop_hotkey, True))
     checks.append(("Capture mode", cfg.capture.mode in {"fullscreen", "region"}, cfg.capture.mode, True))
     checks.append(("Min region size", cfg.capture.min_region_px > 0, str(cfg.capture.min_region_px), True))
+    checks.append(("Capture max_dimension", cfg.capture.max_dimension >= 0, str(cfg.capture.max_dimension), True))
+    checks.append(("Capture image_format", cfg.capture.image_format in {"png", "jpeg"}, cfg.capture.image_format, True))
+    checks.append(("Capture jpeg_quality", 1 <= cfg.capture.jpeg_quality <= 100, str(cfg.capture.jpeg_quality), True))
+    checks.append(
+        ("Playback speech_first_enabled", isinstance(cfg.playback.speech_first_enabled, bool), str(cfg.playback.speech_first_enabled), True)
+    )
+    checks.append(("Playback initial_chunk_chars", cfg.playback.initial_chunk_chars >= 80, str(cfg.playback.initial_chunk_chars), True))
+    checks.append(
+        ("Playback followup_chunk_chars", cfg.playback.followup_chunk_chars >= cfg.playback.initial_chunk_chars, str(cfg.playback.followup_chunk_chars), True)
+    )
+    checks.append(("Playback followup_min_chars", cfg.playback.followup_min_chars >= 20, str(cfg.playback.followup_min_chars), True))
     usage_service = UsageService.from_config(cfg)
     snapshot = usage_service.get_snapshot(force_refresh=True)
     checks.append(
@@ -294,6 +332,9 @@ def test_capture_command(config_path: Path, game_profile: str) -> int:
         cooldown_ms=0,
         save_debug=cfg.debug.save_screenshots,
         debug_dir=cfg.debug.screenshot_dir,
+        max_dimension=cfg.capture.max_dimension,
+        image_format=cfg.capture.image_format,
+        jpeg_quality=cfg.capture.jpeg_quality,
     )
     image_bytes = capturer.capture_fullscreen_png()
 
@@ -307,6 +348,33 @@ def test_capture_command(config_path: Path, game_profile: str) -> int:
     return 0
 
 
+def self_test_command(config_path: Path, game_profile: str) -> int:
+    parts = build_runtime_parts(config_path)
+    setup_logging(str(parts["log_path"]))
+    capturer = parts["capturer"]
+    image_bytes = create_self_test_image_bytes(
+        max_dimension=int(getattr(capturer, "max_dimension", 1400)),
+        image_format=str(getattr(capturer, "image_format", "png")),
+        jpeg_quality=int(getattr(capturer, "jpeg_quality", 90)),
+    )
+    pipeline = parts["pipeline"]
+    result = pipeline.process_self_test(image_bytes=image_bytes, game_profile=f"{game_profile}-self-test")  # type: ignore[attr-defined]
+
+    print(f"Self-test status: {result.status}")
+    print(f"Message: {result.message}")
+    print(f"Characters: {result.chars}")
+    if result.timings is not None:
+        print(
+            "Timings (ms): extract={extract} tts={tts} playback={playback} total={total}".format(
+                extract=result.timings.extract_ms,
+                tts=result.timings.tts_ms,
+                playback=result.timings.playback_ms,
+                total=result.timings.total_ms,
+            )
+        )
+    return 0 if result.status == "played" else 1
+
+
 def config_init_command(config_path: Path, force: bool) -> int:
     init_config(config_path, force=force)
     print(f"Wrote config: {config_path}")
@@ -315,7 +383,7 @@ def config_init_command(config_path: Path, force: bool) -> int:
 
 def install_shortcut_command(config_path: Path) -> int:
     manager = ShortcutManager()
-    target, args, workdir = launch_command(config_path, include_args=False)
+    target, args, workdir = launch_command(config_path)
     icon_path = str(icon_asset_path()) if icon_asset_path().exists() else None
     shortcut = manager.create_desktop_shortcut(target=target, arguments=args, working_dir=workdir, icon_path=icon_path)
     print(f"Desktop shortcut created: {shortcut}")
@@ -323,7 +391,7 @@ def install_shortcut_command(config_path: Path) -> int:
 
 
 def startup_command(config_path: Path, enable: bool, disable: bool, status: bool) -> int:
-    target, args, workdir = launch_command(config_path, include_args=False)
+    target, args, workdir = launch_command(config_path)
     icon_path = str(icon_asset_path()) if icon_asset_path().exists() else None
     manager = StartupManager(ShortcutManager(), target=target, arguments=args, working_dir=workdir, icon_path=icon_path)
 
@@ -413,6 +481,8 @@ def main(argv: list[str] | None = None) -> int:
         return voices_command(args.config)
     if args.command == "test-capture":
         return test_capture_command(args.config, args.game_profile)
+    if args.command == "self-test":
+        return self_test_command(args.config, args.game_profile)
     if args.command == "ui":
         target, arg_str, workdir = launch_command(args.config)
         icon_path = str(icon_asset_path()) if icon_asset_path().exists() else None

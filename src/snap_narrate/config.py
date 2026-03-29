@@ -15,6 +15,7 @@ class OpenAIConfig:
     api_key: str = ""
     admin_api_key: str = ""
     model: str = "gpt-4.1-mini"
+    ultra_fast_model: str = ""
     base_url: str = "https://api.openai.com"
 
 
@@ -22,12 +23,15 @@ class OpenAIConfig:
 class VisionConfig:
     provider: str = "openai"
     timeout_sec: int = 60
+    fast_mode: bool = True
+    ultra_fast_mode: bool = True
 
 
 @dataclass
 class OllamaConfig:
     base_url: str = "http://127.0.0.1:11434"
     model: str = "llava:latest"
+    ultra_fast_model: str = ""
     keep_alive: str = "5m"
     num_predict: int = 2048
     temperature: float = 0.1
@@ -42,6 +46,7 @@ class ElevenLabsConfig:
     api_key: str = ""
     voice_id: str = ""
     model_id: str = "eleven_turbo_v2_5"
+    speech_fast_model_id: str = ""
     output_format: str = "mp3_44100_128"
 
 
@@ -53,6 +58,9 @@ class CaptureConfig:
     stop_hotkey: str = "ctrl+shift+s"
     cooldown_ms: int = 1500
     min_region_px: int = 64
+    max_dimension: int = 1600
+    image_format: str = "jpeg"
+    jpeg_quality: int = 85
 
 
 @dataclass
@@ -71,6 +79,10 @@ class DedupConfig:
 class PlaybackConfig:
     retry_count: int = 2
     retry_backoff_ms: int = 700
+    speech_first_enabled: bool = True
+    initial_chunk_chars: int = 220
+    followup_chunk_chars: int = 650
+    followup_min_chars: int = 60
 
 
 @dataclass
@@ -111,6 +123,18 @@ def _section(data: dict[str, Any], key: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def load_config(path: Path) -> AppConfig:
     content: dict[str, Any] = {}
     if path.exists():
@@ -140,16 +164,20 @@ def load_config(path: Path) -> AppConfig:
         vision=VisionConfig(
             provider=str(vision_data.get("provider", VisionConfig.provider)),
             timeout_sec=int(vision_data.get("timeout_sec", VisionConfig.timeout_sec)),
+            fast_mode=bool(vision_data.get("fast_mode", VisionConfig.fast_mode)),
+            ultra_fast_mode=bool(vision_data.get("ultra_fast_mode", VisionConfig.ultra_fast_mode)),
         ),
         openai=OpenAIConfig(
             api_key=str(openai_data.get("api_key", "")),
             admin_api_key=str(openai_data.get("admin_api_key", "")),
             model=str(openai_data.get("model", OpenAIConfig.model)),
+            ultra_fast_model=str(openai_data.get("ultra_fast_model", OpenAIConfig.ultra_fast_model)),
             base_url=str(openai_data.get("base_url", OpenAIConfig.base_url)),
         ),
         ollama=OllamaConfig(
             base_url=str(ollama_data.get("base_url", OllamaConfig.base_url)),
             model=str(ollama_data.get("model", OllamaConfig.model)),
+            ultra_fast_model=str(ollama_data.get("ultra_fast_model", OllamaConfig.ultra_fast_model)),
             keep_alive=str(ollama_data.get("keep_alive", OllamaConfig.keep_alive)),
             num_predict=int(ollama_data.get("num_predict", OllamaConfig.num_predict)),
             temperature=float(ollama_data.get("temperature", OllamaConfig.temperature)),
@@ -164,6 +192,9 @@ def load_config(path: Path) -> AppConfig:
             api_key=str(eleven_data.get("api_key", "")),
             voice_id=str(eleven_data.get("voice_id", "")),
             model_id=str(eleven_data.get("model_id", ElevenLabsConfig.model_id)),
+            speech_fast_model_id=str(
+                eleven_data.get("speech_fast_model_id", ElevenLabsConfig.speech_fast_model_id)
+            ),
             output_format=str(eleven_data.get("output_format", ElevenLabsConfig.output_format)),
         ),
         capture=CaptureConfig(
@@ -173,6 +204,9 @@ def load_config(path: Path) -> AppConfig:
             stop_hotkey=str(capture_data.get("stop_hotkey", CaptureConfig.stop_hotkey)),
             cooldown_ms=int(capture_data.get("cooldown_ms", CaptureConfig.cooldown_ms)),
             min_region_px=int(capture_data.get("min_region_px", CaptureConfig.min_region_px)),
+            max_dimension=int(capture_data.get("max_dimension", CaptureConfig.max_dimension)),
+            image_format=str(capture_data.get("image_format", CaptureConfig.image_format)).strip().lower(),
+            jpeg_quality=int(capture_data.get("jpeg_quality", CaptureConfig.jpeg_quality)),
         ),
         filter=FilterConfig(
             min_block_chars=int(filter_data.get("min_block_chars", FilterConfig.min_block_chars)),
@@ -185,6 +219,12 @@ def load_config(path: Path) -> AppConfig:
         playback=PlaybackConfig(
             retry_count=int(playback_data.get("retry_count", PlaybackConfig.retry_count)),
             retry_backoff_ms=int(playback_data.get("retry_backoff_ms", PlaybackConfig.retry_backoff_ms)),
+            speech_first_enabled=bool(
+                playback_data.get("speech_first_enabled", PlaybackConfig.speech_first_enabled)
+            ),
+            initial_chunk_chars=int(playback_data.get("initial_chunk_chars", PlaybackConfig.initial_chunk_chars)),
+            followup_chunk_chars=int(playback_data.get("followup_chunk_chars", PlaybackConfig.followup_chunk_chars)),
+            followup_min_chars=int(playback_data.get("followup_min_chars", PlaybackConfig.followup_min_chars)),
         ),
         debug=DebugConfig(
             save_screenshots=bool(debug_data.get("save_screenshots", DebugConfig.save_screenshots)),
@@ -203,15 +243,21 @@ def load_config(path: Path) -> AppConfig:
     cfg.openai.api_key = os.getenv("OPENAI_API_KEY", cfg.openai.api_key)
     cfg.openai.admin_api_key = os.getenv("OPENAI_ADMIN_API_KEY", cfg.openai.admin_api_key)
     cfg.openai.model = os.getenv("OPENAI_MODEL", cfg.openai.model)
+    cfg.openai.ultra_fast_model = os.getenv("OPENAI_ULTRA_FAST_MODEL", cfg.openai.ultra_fast_model)
     cfg.openai.base_url = os.getenv("OPENAI_BASE_URL", cfg.openai.base_url)
 
     cfg.vision.provider = os.getenv("VISION_PROVIDER", cfg.vision.provider)
+    cfg.vision.fast_mode = _env_bool("VISION_FAST_MODE", cfg.vision.fast_mode)
+    cfg.vision.ultra_fast_mode = _env_bool("VISION_ULTRA_FAST_MODE", cfg.vision.ultra_fast_mode)
     if cfg.capture.mode not in {"fullscreen", "region"}:
         cfg.capture.mode = "fullscreen"
 
     cfg.elevenlabs.api_key = os.getenv("ELEVENLABS_API_KEY", cfg.elevenlabs.api_key)
     cfg.elevenlabs.voice_id = os.getenv("ELEVENLABS_VOICE_ID", cfg.elevenlabs.voice_id)
     cfg.elevenlabs.model_id = os.getenv("ELEVENLABS_MODEL_ID", cfg.elevenlabs.model_id)
+    cfg.elevenlabs.speech_fast_model_id = os.getenv(
+        "ELEVENLABS_SPEECH_FAST_MODEL_ID", cfg.elevenlabs.speech_fast_model_id
+    )
     cfg.elevenlabs.output_format = os.getenv("ELEVENLABS_OUTPUT_FORMAT", cfg.elevenlabs.output_format)
 
     hotkey = os.getenv("SNAPNARRATE_HOTKEY")
@@ -220,8 +266,14 @@ def load_config(path: Path) -> AppConfig:
     stop_hotkey = os.getenv("SNAPNARRATE_STOP_HOTKEY")
     if stop_hotkey:
         cfg.capture.stop_hotkey = stop_hotkey
+    cfg.capture.max_dimension = int(os.getenv("SNAPNARRATE_CAPTURE_MAX_DIMENSION", str(cfg.capture.max_dimension)))
+    image_format = os.getenv("SNAPNARRATE_CAPTURE_IMAGE_FORMAT")
+    if image_format:
+        cfg.capture.image_format = image_format.strip().lower()
+    cfg.capture.jpeg_quality = int(os.getenv("SNAPNARRATE_CAPTURE_JPEG_QUALITY", str(cfg.capture.jpeg_quality)))
     cfg.ollama.base_url = os.getenv("OLLAMA_BASE_URL", cfg.ollama.base_url)
     cfg.ollama.model = os.getenv("OLLAMA_MODEL", cfg.ollama.model)
+    cfg.ollama.ultra_fast_model = os.getenv("OLLAMA_ULTRA_FAST_MODEL", cfg.ollama.ultra_fast_model)
     cfg.ollama.keep_alive = os.getenv("OLLAMA_KEEP_ALIVE", cfg.ollama.keep_alive)
     cfg.ollama.num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", str(cfg.ollama.num_predict)))
     cfg.ollama.temperature = float(os.getenv("OLLAMA_TEMPERATURE", str(cfg.ollama.temperature)))
@@ -237,6 +289,28 @@ def load_config(path: Path) -> AppConfig:
     if raw_budget_env is not None and raw_budget_env.strip() != "":
         cfg.usage.openai_monthly_budget_usd = float(raw_budget_env)
     cfg.usage.cache_seconds = int(os.getenv("USAGE_CACHE_SECONDS", str(cfg.usage.cache_seconds)))
+    cfg.playback.speech_first_enabled = _env_bool(
+        "SNAPNARRATE_SPEECH_FIRST_ENABLED", cfg.playback.speech_first_enabled
+    )
+    cfg.playback.initial_chunk_chars = int(
+        os.getenv("SNAPNARRATE_INITIAL_CHUNK_CHARS", str(cfg.playback.initial_chunk_chars))
+    )
+    cfg.playback.followup_chunk_chars = int(
+        os.getenv("SNAPNARRATE_FOLLOWUP_CHUNK_CHARS", str(cfg.playback.followup_chunk_chars))
+    )
+    cfg.playback.followup_min_chars = int(
+        os.getenv("SNAPNARRATE_FOLLOWUP_MIN_CHARS", str(cfg.playback.followup_min_chars))
+    )
+
+    if cfg.capture.image_format == "jpg":
+        cfg.capture.image_format = "jpeg"
+    if cfg.capture.image_format not in {"png", "jpeg"}:
+        cfg.capture.image_format = CaptureConfig.image_format
+    cfg.capture.max_dimension = max(cfg.capture.max_dimension, 0)
+    cfg.capture.jpeg_quality = min(max(cfg.capture.jpeg_quality, 1), 100)
+    cfg.playback.initial_chunk_chars = max(cfg.playback.initial_chunk_chars, 80)
+    cfg.playback.followup_chunk_chars = max(cfg.playback.followup_chunk_chars, cfg.playback.initial_chunk_chars)
+    cfg.playback.followup_min_chars = max(cfg.playback.followup_min_chars, 20)
 
     return cfg
 
@@ -251,16 +325,20 @@ log_file = "logs/snapnarrate.log"
 [vision]
 provider = "openai"
 timeout_sec = 60
+fast_mode = true
+ultra_fast_mode = true
 
 [openai]
 api_key = ""
 admin_api_key = ""
 model = "gpt-4.1-mini"
+ultra_fast_model = ""
 base_url = "https://api.openai.com"
 
 [ollama]
 base_url = "http://127.0.0.1:11434"
 model = "llava:latest"
+ultra_fast_model = ""
 keep_alive = "5m"
 num_predict = 2048
 temperature = 0.1
@@ -273,6 +351,7 @@ coverage_retry_attempts = 1
 api_key = ""
 voice_id = ""
 model_id = "eleven_turbo_v2_5"
+speech_fast_model_id = ""
 output_format = "mp3_44100_128"
 
 [capture]
@@ -282,6 +361,9 @@ region_hotkey = "ctrl+shift+r"
 stop_hotkey = "ctrl+shift+s"
 cooldown_ms = 1500
 min_region_px = 64
+max_dimension = 1600
+image_format = "jpeg"
+jpeg_quality = 85
 
 [filter]
 min_block_chars = 140
@@ -294,6 +376,10 @@ similarity_threshold = 0.95
 [playback]
 retry_count = 2
 retry_backoff_ms = 700
+speech_first_enabled = true
+initial_chunk_chars = 220
+followup_chunk_chars = 650
+followup_min_chars = 60
 
 [debug]
 save_screenshots = false
@@ -322,16 +408,20 @@ log_file = {_toml_str(cfg.log_file)}
 [vision]
 provider = {_toml_str(cfg.vision.provider)}
 timeout_sec = {cfg.vision.timeout_sec}
+fast_mode = {"true" if cfg.vision.fast_mode else "false"}
+ultra_fast_mode = {"true" if cfg.vision.ultra_fast_mode else "false"}
 
 [openai]
 api_key = {_toml_str(cfg.openai.api_key)}
 admin_api_key = {_toml_str(cfg.openai.admin_api_key)}
 model = {_toml_str(cfg.openai.model)}
+ultra_fast_model = {_toml_str(cfg.openai.ultra_fast_model)}
 base_url = {_toml_str(cfg.openai.base_url)}
 
 [ollama]
 base_url = {_toml_str(cfg.ollama.base_url)}
 model = {_toml_str(cfg.ollama.model)}
+ultra_fast_model = {_toml_str(cfg.ollama.ultra_fast_model)}
 keep_alive = {_toml_str(cfg.ollama.keep_alive)}
 num_predict = {cfg.ollama.num_predict}
 temperature = {cfg.ollama.temperature}
@@ -344,6 +434,7 @@ coverage_retry_attempts = {cfg.ollama.coverage_retry_attempts}
 api_key = {_toml_str(cfg.elevenlabs.api_key)}
 voice_id = {_toml_str(cfg.elevenlabs.voice_id)}
 model_id = {_toml_str(cfg.elevenlabs.model_id)}
+speech_fast_model_id = {_toml_str(cfg.elevenlabs.speech_fast_model_id)}
 output_format = {_toml_str(cfg.elevenlabs.output_format)}
 
 [capture]
@@ -353,6 +444,9 @@ region_hotkey = {_toml_str(cfg.capture.region_hotkey)}
 stop_hotkey = {_toml_str(cfg.capture.stop_hotkey)}
 cooldown_ms = {cfg.capture.cooldown_ms}
 min_region_px = {cfg.capture.min_region_px}
+max_dimension = {cfg.capture.max_dimension}
+image_format = {_toml_str(cfg.capture.image_format)}
+jpeg_quality = {cfg.capture.jpeg_quality}
 
 [filter]
 min_block_chars = {cfg.filter.min_block_chars}
@@ -365,6 +459,10 @@ similarity_threshold = {cfg.dedup.similarity_threshold}
 [playback]
 retry_count = {cfg.playback.retry_count}
 retry_backoff_ms = {cfg.playback.retry_backoff_ms}
+speech_first_enabled = {"true" if cfg.playback.speech_first_enabled else "false"}
+initial_chunk_chars = {cfg.playback.initial_chunk_chars}
+followup_chunk_chars = {cfg.playback.followup_chunk_chars}
+followup_min_chars = {cfg.playback.followup_min_chars}
 
 [debug]
 save_screenshots = {"true" if cfg.debug.save_screenshots else "false"}

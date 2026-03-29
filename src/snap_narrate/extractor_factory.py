@@ -14,6 +14,9 @@ def build_extractor(cfg: AppConfig) -> VisionExtractor:
             ignore_short_lines=cfg.filter.ignore_short_lines,
             timeout_sec=cfg.vision.timeout_sec,
             base_url=cfg.openai.base_url,
+            fast_mode=cfg.vision.fast_mode,
+            ultra_fast_mode=cfg.vision.ultra_fast_mode,
+            ultra_fast_model=cfg.openai.ultra_fast_model,
         )
     if provider == "ollama":
         return OllamaVisionExtractor(
@@ -28,6 +31,9 @@ def build_extractor(cfg: AppConfig) -> VisionExtractor:
             continuation_attempts=cfg.ollama.continuation_attempts,
             min_paragraphs=cfg.ollama.min_paragraphs,
             coverage_retry_attempts=cfg.ollama.coverage_retry_attempts,
+            fast_mode=cfg.vision.fast_mode,
+            ultra_fast_mode=cfg.vision.ultra_fast_mode,
+            ultra_fast_model=cfg.ollama.ultra_fast_model,
         )
     raise ValueError(f"Unsupported vision.provider: {cfg.vision.provider}")
 

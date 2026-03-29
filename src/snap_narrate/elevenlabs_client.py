@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import io
+import logging
+import threading
+import time
 
 import numpy as np
 
@@ -11,18 +14,26 @@ class ElevenLabsClient:
         api_key: str,
         voice_id: str,
         model_id: str,
+        speech_fast_model_id: str = "",
         output_format: str = "mp3_44100_128",
         timeout_sec: int = 60,
     ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
         self.model_id = model_id
+        self.speech_fast_model_id = speech_fast_model_id.strip()
         self.output_format = output_format
         self.timeout_sec = timeout_sec
+        self._session = None
 
-    def synthesize(self, text: str) -> bytes:
+    def _requests_session(self):
         import requests
 
+        if self._session is None:
+            self._session = requests.Session()
+        return self._session
+
+    def synthesize(self, text: str, model_id_override: str | None = None) -> bytes:
         if not self.api_key:
             raise ValueError("ElevenLabs API key is missing")
         if not self.voice_id:
@@ -36,9 +47,9 @@ class ElevenLabsClient:
         }
         payload = {
             "text": text,
-            "model_id": self.model_id,
+            "model_id": model_id_override or self.model_id,
         }
-        response = requests.post(
+        response = self._requests_session().post(
             url,
             headers=headers,
             params={"output_format": self.output_format},
@@ -49,13 +60,14 @@ class ElevenLabsClient:
             raise RuntimeError(f"ElevenLabs synthesis failed ({response.status_code}): {response.text[:200]}")
         return response.content
 
-    def list_voices(self) -> list[tuple[str, str]]:
-        import requests
+    def synthesize_speech_fast(self, text: str) -> bytes:
+        return self.synthesize(text, model_id_override=self.speech_fast_model_id or self.model_id)
 
+    def list_voices(self) -> list[tuple[str, str]]:
         if not self.api_key:
             raise ValueError("ElevenLabs API key is missing")
 
-        response = requests.get(
+        response = self._requests_session().get(
             "https://api.elevenlabs.io/v1/voices",
             headers={"xi-api-key": self.api_key},
             timeout=self.timeout_sec,
@@ -67,12 +79,10 @@ class ElevenLabsClient:
         return [(str(v.get("voice_id", "")), str(v.get("name", ""))) for v in voices]
 
     def get_subscription_usage(self) -> dict[str, int | None]:
-        import requests
-
         if not self.api_key:
             raise ValueError("ElevenLabs API key is missing")
 
-        response = requests.get(
+        response = self._requests_session().get(
             "https://api.elevenlabs.io/v1/user/subscription",
             headers={"xi-api-key": self.api_key},
             timeout=self.timeout_sec,
@@ -96,6 +106,10 @@ class ElevenLabsClient:
 class TempFileAudioPlayer:
     def __init__(self) -> None:
         self._is_playing = False
+        self._lock = threading.Lock()
+        self._playback_token = 0
+        self._pending_chunks: list[tuple[np.ndarray, int, int]] = []
+        self._worker: threading.Thread | None = None
 
     @staticmethod
     def _is_mp3(audio_bytes: bytes) -> bool:
@@ -130,17 +144,74 @@ class TempFileAudioPlayer:
         samples = pcm.astype(np.float32) / 32768.0
         return samples, 44100
 
+    def _decode_audio(self, audio_bytes: bytes) -> tuple[np.ndarray, int, int]:
+        decode_start = time.perf_counter()
+        samples, samplerate = self.audio_from_bytes(audio_bytes)
+        decode_ms = int(round((time.perf_counter() - decode_start) * 1000))
+        return samples, samplerate, decode_ms
+
     def play(self, audio_bytes: bytes) -> None:
         import sounddevice as sd
 
-        samples, samplerate = self.audio_from_bytes(audio_bytes)
-        self._is_playing = True
-        try:
-            sd.play(samples, samplerate=samplerate, blocking=True)
-        finally:
-            self._is_playing = False
+        chunk = self._decode_audio(audio_bytes)
+        with self._lock:
+            self._playback_token += 1
+            token = self._playback_token
+            self._pending_chunks = [chunk]
+            self._is_playing = True
+        sd.stop()
+        self._start_worker(token)
+
+    def queue(self, audio_bytes: bytes) -> None:
+        chunk = self._decode_audio(audio_bytes)
+        with self._lock:
+            if self._playback_token == 0:
+                self._playback_token = 1
+            token = self._playback_token
+            self._pending_chunks.append(chunk)
+            self._is_playing = True
+            worker_alive = self._worker is not None and self._worker.is_alive()
+        if not worker_alive:
+            self._start_worker(token)
+
+    def _start_worker(self, token: int) -> None:
+        def playback_loop() -> None:
+            import sounddevice as sd
+
+            while True:
+                with self._lock:
+                    if token != self._playback_token:
+                        return
+                    if not self._pending_chunks:
+                        self._is_playing = False
+                        return
+                    samples, samplerate, decode_ms = self._pending_chunks.pop(0)
+
+                try:
+                    logging.getLogger("snap_narrate").info(
+                        "event=audio_playback_start decode_ms=%s samplerate=%s sample_count=%s",
+                        decode_ms,
+                        samplerate,
+                        len(samples),
+                    )
+                    sd.play(samples, samplerate=samplerate, blocking=False)
+                    sd.wait()
+                except Exception as exc:  # noqa: BLE001
+                    logging.getLogger("snap_narrate").warning("event=audio_wait_failed error=%s", exc)
+                finally:
+                    with self._lock:
+                        if token == self._playback_token and not self._pending_chunks:
+                            self._is_playing = False
+
+        worker = threading.Thread(target=playback_loop, daemon=True)
+        self._worker = worker
+        worker.start()
 
     def stop(self) -> None:
         import sounddevice as sd
 
+        with self._lock:
+            self._playback_token += 1
+            self._pending_chunks.clear()
+            self._is_playing = False
         sd.stop()

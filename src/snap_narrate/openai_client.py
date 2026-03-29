@@ -9,6 +9,12 @@ from snap_narrate.models import ExtractResult
 from snap_narrate.usage import record_openai_usage
 
 
+def infer_image_media_type(image_bytes: bytes) -> str:
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    return "image/png"
+
+
 def parse_extraction_payload(raw_content: str) -> ExtractResult:
     content = raw_content.strip()
     if not content:
@@ -28,6 +34,7 @@ def parse_extraction_payload(raw_content: str) -> ExtractResult:
     text = str(parsed.get("text", "")).strip()
     confidence = parsed.get("confidence", 0.0)
     dropped_reason = parsed.get("dropped_reason")
+    more_text_likely = parsed.get("more_text_likely")
 
     try:
         confidence_val = float(confidence)
@@ -37,7 +44,26 @@ def parse_extraction_payload(raw_content: str) -> ExtractResult:
     if dropped_reason is not None:
         dropped_reason = str(dropped_reason)
 
-    return ExtractResult(text=text, confidence=confidence_val, dropped_reason=dropped_reason)
+    more_text_likely_val: bool | None
+    if isinstance(more_text_likely, bool):
+        more_text_likely_val = more_text_likely
+    elif isinstance(more_text_likely, str):
+        lowered = more_text_likely.strip().lower()
+        if lowered in {"true", "yes", "1"}:
+            more_text_likely_val = True
+        elif lowered in {"false", "no", "0"}:
+            more_text_likely_val = False
+        else:
+            more_text_likely_val = None
+    else:
+        more_text_likely_val = None
+
+    return ExtractResult(
+        text=text,
+        confidence=confidence_val,
+        dropped_reason=dropped_reason,
+        more_text_likely=more_text_likely_val,
+    )
 
 
 class OpenAIVisionExtractor:
@@ -48,27 +74,42 @@ class OpenAIVisionExtractor:
         ignore_short_lines: int,
         timeout_sec: int = 60,
         base_url: str = "https://api.openai.com",
+        fast_mode: bool = True,
+        ultra_fast_mode: bool = True,
+        ultra_fast_model: str = "",
     ) -> None:
         self.api_key = api_key
         self.model = model
         self.ignore_short_lines = ignore_short_lines
         self.timeout_sec = timeout_sec
         self.base_url = base_url.rstrip("/")
+        self.fast_mode = fast_mode
+        self.ultra_fast_mode = ultra_fast_mode
+        self.ultra_fast_model = ultra_fast_model.strip()
+        self._session: Any | None = None
 
-    def extract_narrative_text(self, image_bytes: bytes, game_profile: str = "default") -> ExtractResult:
-        import base64
-
+    def _requests_session(self) -> Any:
         import requests
+
+        if self._session is None:
+            self._session = requests.Session()
+        return self._session
+
+    def _request_extraction(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        model: str,
+        log_event: str,
+    ) -> ExtractResult:
+        import base64
 
         if not self.api_key:
             raise ValueError("OpenAI API key is missing")
 
-        prompt = build_extraction_prompt(self.ignore_short_lines, game_profile)
-
         image_b64 = base64.b64encode(image_bytes).decode("ascii")
-
         payload: dict[str, Any] = {
-            "model": self.model,
+            "model": model,
             "messages": [
                 {
                     "role": "system",
@@ -77,10 +118,10 @@ class OpenAIVisionExtractor:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt + f" Profile: {game_profile}."},
+                        {"type": "text", "text": prompt},
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                            "image_url": {"url": f"data:{infer_image_media_type(image_bytes)};base64,{image_b64}"},
                         },
                     ],
                 },
@@ -94,7 +135,7 @@ class OpenAIVisionExtractor:
             "Content-Type": "application/json",
         }
 
-        response = requests.post(
+        response = self._requests_session().post(
             f"{self.base_url}/v1/chat/completions",
             headers=headers,
             json=payload,
@@ -110,15 +151,46 @@ class OpenAIVisionExtractor:
         raw_content = data["choices"][0]["message"]["content"]
         result = parse_extraction_payload(raw_content)
         logging.getLogger("snap_narrate").info(
-            "event=extract_result chars=%s confidence=%.2f dropped_reason=%s",
+            "event=%s chars=%s confidence=%.2f dropped_reason=%s more_text_likely=%s model=%s",
+            log_event,
             len(result.text),
             result.confidence,
             result.dropped_reason,
+            result.more_text_likely,
+            model,
         )
         return result
 
+    def extract_narrative_text(self, image_bytes: bytes, game_profile: str = "default") -> ExtractResult:
+        prompt = build_extraction_prompt(self.ignore_short_lines, game_profile, fast_mode=self.fast_mode)
+        return self._request_extraction(
+            image_bytes=image_bytes,
+            prompt=prompt + f" Profile: {game_profile}.",
+            model=self.model,
+            log_event="extract_result",
+        )
 
-def build_extraction_prompt(ignore_short_lines: int, game_profile: str) -> str:
+    def extract_initial_narrative_text(self, image_bytes: bytes, game_profile: str = "default") -> ExtractResult:
+        prompt = build_initial_extraction_prompt(
+            self.ignore_short_lines,
+            game_profile,
+            ultra_fast_mode=self.ultra_fast_mode,
+        )
+        model = self.ultra_fast_model or self.model
+        return self._request_extraction(
+            image_bytes=image_bytes,
+            prompt=prompt + f" Profile: {game_profile}.",
+            model=model,
+            log_event="initial_extract_result",
+        )
+
+
+def build_extraction_prompt(ignore_short_lines: int, game_profile: str, fast_mode: bool = False) -> str:
+    speed_hint = (
+        " Prioritize speed over completeness. Return the main visible narrative block first and do not spend extra effort recovering every paragraph."
+        if fast_mode
+        else ""
+    )
     return (
         "You are a strict OCR filter for games. Read the screenshot and return only long-form narrative text "
         "(dialogue, lore, quest narrative, books/journals). Exclude menus, HUD labels, minimap text, button "
@@ -126,8 +198,27 @@ def build_extraction_prompt(ignore_short_lines: int, game_profile: str) -> str:
         "Return all visible narrative paragraphs in reading order and preserve paragraph breaks. "
         "Do not stop after the first paragraph."
         f" Ignore lines with fewer than {ignore_short_lines} words unless they are part of a larger paragraph. "
+        f"{speed_hint}"
         "Return JSON exactly with keys: text (string), confidence (number 0-1), dropped_reason (string or null). "
         f"Profile: {game_profile}."
+    )
+
+
+def build_initial_extraction_prompt(ignore_short_lines: int, game_profile: str, ultra_fast_mode: bool = True) -> str:
+    speed_hint = (
+        " Prioritize the first readable narrative paragraph only. Return quickly, even if more text exists below it."
+        if ultra_fast_mode
+        else ""
+    )
+    return (
+        "You are a strict OCR filter for games. Read the screenshot and return only the first long-form narrative paragraph "
+        "(dialogue, lore, quest narrative, books/journals). Exclude menus, HUD labels, minimap text, button hints, health/ammo "
+        "counters, and short subtitles. Keep verbatim wording."
+        f" Ignore lines with fewer than {ignore_short_lines} words unless they are part of that paragraph."
+        f"{speed_hint}"
+        " Return JSON exactly with keys: text (string), confidence (number 0-1), dropped_reason (string or null), "
+        "more_text_likely (boolean, true when more visible narrative likely remains after the returned paragraph)."
+        f" Profile: {game_profile}."
     )
 
 
@@ -279,6 +370,9 @@ class OllamaVisionExtractor:
         continuation_attempts: int = 1,
         min_paragraphs: int = 2,
         coverage_retry_attempts: int = 1,
+        fast_mode: bool = True,
+        ultra_fast_mode: bool = True,
+        ultra_fast_model: str = "",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -291,25 +385,52 @@ class OllamaVisionExtractor:
         self.continuation_attempts = continuation_attempts
         self.min_paragraphs = min_paragraphs
         self.coverage_retry_attempts = coverage_retry_attempts
+        self.fast_mode = fast_mode
+        self.ultra_fast_mode = ultra_fast_mode
+        self.ultra_fast_model = ultra_fast_model.strip()
+        self._session: Any | None = None
+
+    def _requests_session(self) -> Any:
+        import requests
+
+        if self._session is None:
+            self._session = requests.Session()
+        return self._session
 
     def extract_narrative_text(self, image_bytes: bytes, game_profile: str = "default") -> ExtractResult:
         import base64
 
-        import requests
-
         image_b64 = base64.b64encode(image_bytes).decode("ascii")
         retry_used = 0
         paragraphs, dropped_reason = self._collect_paragraphs(
-            requests_module=requests,
+            requests_module=self._requests_session(),
             image_b64=image_b64,
             game_profile=game_profile,
             strict=False,
         )
         paragraphs = normalize_paragraphs(paragraphs)
+        if self.fast_mode:
+            if not paragraphs:
+                result = ExtractResult(text="", confidence=0.0, dropped_reason=dropped_reason or "empty_response")
+            else:
+                joined = "\n\n".join(p["text"] for p in paragraphs)
+                avg_conf = sum(float(p["confidence"]) for p in paragraphs) / max(len(paragraphs), 1)
+                result = ExtractResult(text=joined, confidence=avg_conf, dropped_reason="fast_mode_join")
+            logging.getLogger("snap_narrate").info(
+                "event=extract_result provider=ollama chars=%s confidence=%.2f dropped_reason=%s paragraph_count=%s retry_used=%s coverage_low=%s final_chars=%s",
+                len(result.text),
+                result.confidence,
+                result.dropped_reason,
+                len(paragraphs),
+                0,
+                len(paragraphs) < self.min_paragraphs,
+                len(result.text),
+            )
+            return result
         if len(paragraphs) < self.min_paragraphs and self.coverage_retry_attempts > 0:
             retry_used = 1
             retry_paragraphs, retry_dropped = self._collect_paragraphs(
-                requests_module=requests,
+                requests_module=self._requests_session(),
                 image_b64=image_b64,
                 game_profile=game_profile,
                 strict=True,
@@ -325,7 +446,7 @@ class OllamaVisionExtractor:
             result = ExtractResult(text="", confidence=0.0, dropped_reason=dropped_reason or "empty_response")
         else:
             result = self._finalize_paragraphs(
-                requests_module=requests,
+                requests_module=self._requests_session(),
                 paragraphs=paragraphs,
                 game_profile=game_profile,
             )
@@ -344,6 +465,50 @@ class OllamaVisionExtractor:
             retry_used,
             coverage_low,
             final_chars,
+        )
+        return result
+
+    def extract_initial_narrative_text(self, image_bytes: bytes, game_profile: str = "default") -> ExtractResult:
+        import base64
+
+        image_b64 = base64.b64encode(image_bytes).decode("ascii")
+        prompt = build_initial_extraction_prompt(
+            self.ignore_short_lines,
+            game_profile,
+            ultra_fast_mode=self.ultra_fast_mode,
+        )
+        payload: dict[str, Any] = {
+            "model": self.ultra_fast_model or self.model,
+            "prompt": prompt + " Output JSON only, no markdown.",
+            "images": [image_b64],
+            "stream": False,
+            "format": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "confidence": {"type": "number"},
+                    "dropped_reason": {"type": ["string", "null"]},
+                    "more_text_likely": {"type": "boolean"},
+                },
+                "required": ["text", "confidence", "dropped_reason", "more_text_likely"],
+            },
+            "keep_alive": self.keep_alive,
+            "options": {
+                "num_predict": self.num_predict,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+            },
+        }
+        data = self._generate(payload, self._requests_session())
+        raw_content = self._extract_ollama_content(data)
+        result = self._parse_ollama_response(data, raw_content)
+        logging.getLogger("snap_narrate").info(
+            "event=initial_extract_result provider=ollama chars=%s confidence=%.2f dropped_reason=%s more_text_likely=%s model=%s",
+            len(result.text),
+            result.confidence,
+            result.dropped_reason,
+            result.more_text_likely,
+            self.ultra_fast_model or self.model,
         )
         return result
 
